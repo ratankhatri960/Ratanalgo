@@ -1,392 +1,127 @@
 import streamlit as st
 import pandas as pd
-try:
-    import plotly.graph_objects as go
-except ImportError:
-    st.error("Plotly install nahi hui h. Please check requirements.txt")
+import plotly.graph_objects as go
 import requests
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st.error("Error: streamlit-autorefresh install nahi hui h. requirements.txt check karein.")
-    # Dummy function taaki niche ka code crash na ho
-    def st_autorefresh(**kwargs):
-        pass
-
+import time
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # ================= CONFIG =================
-st.set_page_config(layout="wide")
-st.title("🚀 Delta Pro Paper Trading Dashboard")
+st.set_page_config(layout="wide", page_title="Delta Pro FVG Bot")
+st.title("🚀 Delta Pro Dashboard (FVG + EMA)")
 
-st_autorefresh(interval=5000, key="refresh")
+# Auto-refresh every 10 seconds
+st_autorefresh(interval=10000, key="refresh")
 
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+# SECRETS (From Streamlit Cloud Settings)
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
+CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+BASE_URL = "https://delta.exchange"
 
-
-# ================= TELEGRAM ALERT =================
+# ================= FUNCTIONS =================
 def send_telegram(msg):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        if not TELEGRAM_TOKEN or not CHAT_ID: return
+        url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
+    except: pass
 
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": msg
-        })
-    except:
-        pass
-
-
-# ================= DELTA API FETCH =================
 def get_candles(symbol, tf="5m"):
     try:
         now = int(time.time())
-        # Delta India API stable call
         r = requests.get(
             f"{BASE_URL}/v2/history/candles",
             params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now},
             timeout=10
         ).json()
-        
-        if "result" not in r: 
-            return pd.DataFrame()
-            
+        if "result" not in r: return pd.DataFrame()
         df = pd.DataFrame(r["result"]).sort_values("time")
-        
-        # Column names fix for Delta India
         for c in ["open","high","low","close","volume"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-        
-        # 'time' column conversion
-        if "time" in df.columns:
-            df["time"] = pd.to_datetime(df["time"], unit="s")
-            
+            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
+        if "time" in df.columns: df["time"] = pd.to_datetime(df["time"], unit="s")
         return df.dropna()
-    except Exception as e:
-        st.sidebar.error(f"Fetch Error: {e}")
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def get_price(symbol, df):
-    try:
-        r = requests.get(f"{BASE_URL}/v2/tickers/{symbol}", timeout=5).json()
-        return float(r["result"]["close"])
-    except:
-        return float(df.iloc[-1]["close"]) if not df.empty else 0
-# ================= FVG DETECTION =================
 def detect_fvg(df):
-
-    bullish_fvg = None
-    bearish_fvg = None
-
-    if len(df) < 3:
-        return bullish_fvg, bearish_fvg
-
-    if df.iloc[-3]["high"] < df.iloc[-1]["low"]:
-        bullish_fvg = (
-            df.iloc[-3]["high"],
-            df.iloc[-1]["low"]
-        )
-
-    if df.iloc[-3]["low"] > df.iloc[-1]["high"]:
-        bearish_fvg = (
-            df.iloc[-1]["high"],
-            df.iloc[-3]["low"]
-        )
-
+    bullish_fvg, bearish_fvg = False, False
+    if len(df) < 3: return bullish_fvg, bearish_fvg
+    if df.iloc[-3]["high"] < df.iloc[-1]["low"]: bullish_fvg = True
+    if df.iloc[-3]["low"] > df.iloc[-1]["high"]: bearish_fvg = True
     return bullish_fvg, bearish_fvg
 
-
-# ================= SIGNAL GENERATOR =================
-def generate_signal(df):
-
-    price = df.iloc[-1]["close"]
-
-    ema20 = df["close"].ewm(span=20).mean().iloc[-1]
-    ema50 = df["close"].ewm(span=50).mean().iloc[-1]
-
-    vwap = (
-        (df["close"] * df["volume"]).sum()
-        /
-        df["volume"].sum()
-    )
-
-    bullish_fvg, bearish_fvg = detect_fvg(df)
-
-    if price > vwap and ema20 > ema50 and bullish_fvg:
-        return "BUY"
-
-    elif price < vwap and ema20 < ema50 and bearish_fvg:
-        return "SELL"
-
-    return "HOLD"
-
-
 # ================= SESSION STATE =================
-if "trades" not in st.session_state:
-    st.session_state.trades = []
-
-if "last_signal" not in st.session_state:
-    st.session_state.last_signal = None
-
+if "trades" not in st.session_state: st.session_state.trades = []
+if "last_signal" not in st.session_state: st.session_state.last_signal = None
 
 # ================= UI =================
-symbol = st.selectbox(
-    "Select Pair",
-    ["BTCUSDT", "ETHUSDT"]
-)
-
-
-# ================= FETCH DATA =================
 symbol = st.selectbox("Select Pair", ["BTCUSD", "ETHUSD"])
 
-# 1. PEHLE VARIABLES DEFINE KAREIN (Taki error na aaye)
-signal = "HOLD"
-current_price = 0
-df = pd.DataFrame()
-
-# 2. DATA FETCH KAREIN
+# ================= MAIN LOGIC =================
 df = get_candles(symbol)
 
 if not df.empty:
-    # Saara logic yahan (Jo maine pehle diya tha)
+    # 1. INDICATORS
     df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
-    bullish_fvg, bearish_fvg = detect_fvg(df)
     current_price = float(df.iloc[-1]["close"])
     ema20 = df["EMA20"].iloc[-1]
     ema50 = df["EMA50"].iloc[-1]
     vwap = df["VWAP"].iloc[-1]
+    bull_fvg, bear_fvg = detect_fvg(df)
 
-    if current_price > vwap and ema20 > ema50 and bullish_fvg:
-        signal = "BUY"
-    elif current_price < vwap and ema20 < ema50 and bearish_fvg:
-        signal = "SELL"
-    else:
-        signal = "HOLD"
+    # 2. SIGNAL GENERATOR
+    signal = "HOLD"
+    if current_price > vwap and ema20 > ema50 and bull_fvg: signal = "BUY"
+    elif current_price < vwap and ema20 < ema50 and bear_fvg: signal = "SELL"
 
-    # --- AB LINE 177 WALA TRADING LOGIC BHI ISI BLOCK MEIN RAKHEIN ---
-    # (Pura code jo maine last message mein diya tha)
-    
-else:
-    st.warning("Data fetch nahi ho raha...")
-    st.stop() # YE LINE ZAROORI HAI: Taki code aage na badhe
-
-
-# ================= ACTIVE TRADE =================
-active_trade = next(
-    (
-        t for t in st.session_state.trades
-        if t["status"] == "OPEN"
-    ),
-    None
-)
-
-
-# ================= NEW ENTRY =================
+    # 3. ACTIVE TRADE CHECK
     active_trade = next((t for t in st.session_state.trades if t["status"] == "OPEN"), None)
 
+    # 4. NEW ENTRY
     if signal in ["BUY", "SELL"] and active_trade is None:
         trade = {
-            "pair": symbol,
-            "signal": signal,
-            "entry": current_price,
+            "pair": symbol, "signal": signal, "entry": current_price,
             "sl": current_price - 200 if signal == "BUY" else current_price + 200,
             "target": current_price + 400 if signal == "BUY" else current_price - 400,
-            "status": "OPEN",
-            "time": df.iloc[-1]["time"].strftime("%H:%M")
+            "status": "OPEN", "time": datetime.now().strftime("%H:%M")
         }
-
         st.session_state.trades.append(trade)
-
         if st.session_state.last_signal != signal:
-            send_telegram(
-                f"🚀 NEW SIGNAL\n\nPair: {symbol}\nSignal: {signal}\nEntry: {current_price}\nSL: {trade['sl']}\nTarget: {trade['target']}"
-            )
+            send_telegram(f"🚀 NEW SIGNAL\nPair: {symbol}\nSignal: {signal}\nEntry: {current_price}")
             st.session_state.last_signal = signal
 
+    # 5. MANAGE TRADES (Trailing/Exit)
+    for t in st.session_state.trades:
+        if t["status"] == "OPEN":
+            if t["signal"] == "BUY":
+                if current_price <= t["sl"] or current_price >= t["target"]:
+                    t["status"], t["exit"] = ("SL HIT" if current_price <= t["sl"] else "TARGET HIT"), current_price
+                    send_telegram(f"✅ Closed BUY {symbol} @ {current_price}")
+            else:
+                if current_price >= t["sl"] or current_price <= t["target"]:
+                    t["status"], t["exit"] = ("SL HIT" if current_price >= t["sl"] else "TARGET HIT"), current_price
+                    send_telegram(f"✅ Closed SELL {symbol} @ {current_price}")
 
-# ================= TRAILING + EXIT =================
-for trade in st.session_state.trades:
+    # 6. CHART
+    fig = go.Figure(data=[go.Candlestick(x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candles")])
+    fig.add_trace(go.Scatter(x=df["time"], y=df["EMA20"], mode="lines", name="EMA20", line=dict(color='yellow')))
+    fig.add_trace(go.Scatter(x=df["time"], y=df["EMA50"], mode="lines", name="EMA50", line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=df["time"], y=df["VWAP"], mode="lines", name="VWAP", line=dict(color='white')))
+    st.plotly_chart(fig, use_container_width=True)
 
-    if trade["status"] == "OPEN":
+    # 7. ANALYTICS
+    wins = len([t for t in st.session_state.trades if t["status"] == "TARGET HIT"])
+    losses = len([t for t in st.session_state.trades if t["status"] == "SL HIT"])
+    st.subheader("📊 Performance")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Wins", wins)
+    c2.metric("Losses", losses)
+    c3.metric("Win Rate", f"{round(wins/(wins+losses)*100, 2) if (wins+losses)>0 else 0}%")
 
-        if trade["signal"] == "BUY":
+    st.subheader("📊 Trade History")
+    st.dataframe(pd.DataFrame(st.session_state.trades) if st.session_state.trades else "No trades yet.")
 
-            if current_price > trade["entry"] + 200:
-                trade["sl"] = max(
-                    trade["sl"],
-                    trade["entry"]
-                )
-
-            if current_price > trade["entry"] + 300:
-                trade["sl"] = max(
-                    trade["sl"],
-                    trade["entry"] + 100
-                )
-
-            if current_price <= trade["sl"]:
-                trade["status"] = "SL HIT"
-                trade["exit"] = current_price
-
-                send_telegram(f"❌ BUY SL HIT @ {current_price}")
-
-            elif current_price >= trade["target"]:
-                trade["status"] = "TARGET HIT"
-                trade["exit"] = current_price
-
-                send_telegram(f"🎯 BUY TARGET HIT @ {current_price}")
-
-        elif trade["signal"] == "SELL":
-
-            if current_price < trade["entry"] - 200:
-                trade["sl"] = min(
-                    trade["sl"],
-                    trade["entry"]
-                )
-
-            if current_price < trade["entry"] - 300:
-                trade["sl"] = min(
-                    trade["sl"],
-                    trade["entry"] - 100
-                )
-
-            if current_price >= trade["sl"]:
-                trade["status"] = "SL HIT"
-                trade["exit"] = current_price
-
-                send_telegram(f"❌ SELL SL HIT @ {current_price}")
-
-            elif current_price <= trade["target"]:
-                trade["status"] = "TARGET HIT"
-                trade["exit"] = current_price
-
-                send_telegram(f"🎯 SELL TARGET HIT @ {current_price}")
-
-
-# ================= CHART =================
-fig = go.Figure()
-
-fig.add_trace(go.Candlestick(
-    x=df["time"],
-    open=df["open"],
-    high=df["high"],
-    low=df["low"],
-    close=df["close"],
-    name="Candles"
-))
-
-fig.add_trace(go.Scatter(
-    x=df["time"],
-    y=df["EMA20"],
-    mode="lines",
-    name="EMA20"
-))
-
-fig.add_trace(go.Scatter(
-    x=df["time"],
-    y=df["EMA50"],
-    mode="lines",
-    name="EMA50"
-))
-
-fig.add_trace(go.Scatter(
-    x=df["time"],
-    y=df["VWAP"],
-    mode="lines",
-    name="VWAP"
-))
-
-
-# Entry/SL/Target Lines
-if active_trade:
-
-    fig.add_hline(
-        y=active_trade["entry"],
-        annotation_text="ENTRY"
-    )
-
-    fig.add_hline(
-        y=active_trade["sl"],
-        annotation_text="SL"
-    )
-
-    fig.add_hline(
-        y=active_trade["target"],
-        annotation_text="TARGET"
-    )
-
-
-# Buy Sell Markers
-for trade in st.session_state.trades:
-
-    fig.add_trace(go.Scatter(
-        x=[df.iloc[-1]["time"]],
-        y=[trade["entry"]],
-        mode="markers+text",
-        text=[trade["signal"]],
-        textposition="top center",
-        marker=dict(size=12),
-        name=trade["signal"]
-    ))
-
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
-# ================= ANALYTICS =================
-wins = len([
-    t for t in st.session_state.trades
-    if t["status"] == "TARGET HIT"
-])
-
-losses = len([
-    t for t in st.session_state.trades
-    if t["status"] == "SL HIT"
-])
-
-total = wins + losses
-
-win_rate = (
-    round((wins / total) * 100, 2)
-    if total > 0 else 0
-)
-
-
-pnl = 0
-
-for trade in st.session_state.trades:
-
-    if "exit" in trade:
-
-        if trade["signal"] == "BUY":
-            pnl += (
-                trade["exit"] -
-                trade["entry"]
-            )
-
-        else:
-            pnl += (
-                trade["entry"] -
-                trade["exit"]
-            )
-
-
-# ================= DASHBOARD METRICS =================
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("💰 Total PnL", round(pnl, 2))
-col2.metric("📈 Wins", wins)
-col3.metric("📉 Losses", losses)
-col4.metric("🎯 Win Rate", f"{win_rate}%")
-
-
-# ================= TRADE TABLE =================
-st.subheader("📊 Trade History")
-
-st.dataframe(st.session_state.trades)
+else:
+    st.warning("Waiting for Delta India API Data...")
