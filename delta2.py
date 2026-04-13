@@ -174,34 +174,26 @@ active_trade = next(
 
 
 # ================= NEW ENTRY =================
+    active_trade = next((t for t in st.session_state.trades if t["status"] == "OPEN"), None)
+
     if signal in ["BUY", "SELL"] and active_trade is None:
+        trade = {
+            "pair": symbol,
+            "signal": signal,
+            "entry": current_price,
+            "sl": current_price - 200 if signal == "BUY" else current_price + 200,
+            "target": current_price + 400 if signal == "BUY" else current_price - 400,
+            "status": "OPEN",
+            "time": df.iloc[-1]["time"].strftime("%H:%M")
+        }
 
-    trade = {
-        "pair": symbol,
-        "signal": signal,
-        "entry": current_price,
-        "sl": current_price - 200 if signal == "BUY" else current_price + 200,
-        "target": current_price + 400 if signal == "BUY" else current_price - 400,
-        "status": "OPEN"
-    }
+        st.session_state.trades.append(trade)
 
-    st.session_state.trades.append(trade)
-
-    if st.session_state.last_signal != signal:
-
-        send_telegram(
-            f"""
-🚀 NEW SIGNAL
-
-Pair: {symbol}
-Signal: {signal}
-Entry: {current_price}
-SL: {trade['sl']}
-Target: {trade['target']}
-"""
-        )
-
-        st.session_state.last_signal = signal
+        if st.session_state.last_signal != signal:
+            send_telegram(
+                f"🚀 NEW SIGNAL\n\nPair: {symbol}\nSignal: {signal}\nEntry: {current_price}\nSL: {trade['sl']}\nTarget: {trade['target']}"
+            )
+            st.session_state.last_signal = signal
 
 
 # ================= TRAILING + EXIT =================
