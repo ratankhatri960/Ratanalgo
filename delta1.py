@@ -6,7 +6,7 @@ from datetime import datetime, time as dt_time
 
 # ================= CONFIG =================
 st.set_page_config(layout="wide", page_title="Delta Algo Pro")
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 
 # GITHUB SAFETY: Secrets use kar rahe hain
