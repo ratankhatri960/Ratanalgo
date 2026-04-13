@@ -19,7 +19,7 @@ LEVERAGE = 10
 
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # ================= CORE FUNCTIONS =================
 def send_telegram(msg):
