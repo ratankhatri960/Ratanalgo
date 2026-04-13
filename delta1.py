@@ -9,7 +9,7 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(layout="wide", page_title="Delta Pro Auto-Bot")
 st_autorefresh(interval=10000, key="refresh") # 10 sec refresh
 
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 SYMBOLS = ["BTCUSD", "ETHUSD"]
 TOTAL_CAPITAL = 1000  
 ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40} 
