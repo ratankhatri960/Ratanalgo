@@ -3,25 +3,26 @@ import pandas as pd
 import requests
 import time
 from datetime import datetime, time as dt_time
+from streamlit_autorefresh import st_autorefresh
 
-# ================= CONFIG =================
-st.set_page_config(layout="wide", page_title="Delta Algo Pro")
+# ================= CONFIG & RISK =================
+st.set_page_config(layout="wide", page_title="Delta Pro Auto-Bot")
+st_autorefresh(interval=10000, key="refresh")
+
 BASE_URL = "https://api.india.delta.exchange"
 SYMBOLS = ["BTCUSD", "ETHUSD"]
+TOTAL_CAPITAL = 1000  # Total $1000
+ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40} # 60% BTC, 40% ETH
+LEVERAGE = 10
 
-# GITHUB SAFETY: Secrets use kar rahe hain
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
 
-LEVERAGE = 10
-BALANCE = 10000
-
 # ================= SESSION INIT =================
-if "active_trades" not in st.session_state: st.session_state.active_trades = []
-if "closed_trades" not in st.session_state: st.session_state.closed_trades = []
+if "trades" not in st.session_state: st.session_state.trades = []
 if "orb" not in st.session_state: st.session_state.orb = {}
 
-# ================= TELEGRAM =================
+# ================= UTILS =================
 def send_telegram(msg):
     try:
         if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
@@ -29,167 +30,107 @@ def send_telegram(msg):
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
     except: pass
 
-# ================= DATA FETCHING =================
 def get_candles(symbol, tf="5m"):
     try:
         now = int(time.time())
-        r = requests.get(
-            f"{BASE_URL}/v2/history/candles",
-            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now},
-            timeout=5
-        ).json()
+        r = requests.get(f"{BASE_URL}/v2/history/candles",
+            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now}, timeout=10).json()
         if "result" not in r: return pd.DataFrame()
         df = pd.DataFrame(r["result"]).sort_values("time")
-        for c in ["open","high","low","close"]:
+        for c in ["open","high","low","close","volume"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
         return df.dropna()
     except: return pd.DataFrame()
 
-def get_price(symbol, df):
-    try:
-        r = requests.get(f"{BASE_URL}/v2/tickers/{symbol}", timeout=5).json()
-        return float(r["result"]["close"])
-    except:
-        return float(df.iloc[-1]["close"]) if not df.empty else 0
-
-# ================= INDICATORS & UTILS =================
 def ema(series, n):
     return series.ewm(span=n, adjust=False).mean()
 
-def calc_qty(price):
-    risk = BALANCE * 0.1
-    return round((risk * LEVERAGE) / price, 4)
+# ================= ENGINE LOGIC =================
+market_watch = []
 
-def trade_exists(symbol, strategy_name):
-    return any(t["symbol"] == symbol and strategy_name in t["strategy"] for t in st.session_state.active_trades)
+for symbol in SYMBOLS:
+    df = get_candles(symbol)
+    if df.empty: continue
 
-# ================= ORB LOGIC =================
-def update_orb(symbol, df):
-    if df.empty: return
-    df["dt"] = pd.to_datetime(df["time"], unit="s") + pd.Timedelta(hours=5, minutes=30)
-    df["t"] = df["dt"].dt.time
-    # Opening Range: 11:30 PM to 12:30 AM (Example range)
-    orb_df = df[(df["t"] >= dt_time(23,30)) | (df["t"] <= dt_time(0,30))]
-    if not orb_df.empty:
-        st.session_state.orb[symbol] = {
-            "high": float(orb_df["high"].max()),
-            "low": float(orb_df["low"].min())
-        }
-
-# ================= TRADE MANAGEMENT =================
-def close_trade(trade, price):
-    trade["exit_price"] = price
-    trade["exit_time"] = datetime.now().strftime("%H:%M:%S")
-    trade["real_pnl"] = trade["running_pnl"]
-    trade["status"] = "CLOSED"
-    st.session_state.closed_trades.append(trade)
-    st.session_state.active_trades.remove(trade)
-    send_telegram(f"✅ Closed {trade['symbol']} | PnL: {trade['real_pnl']}")
-
-def manage_trades():
-    for trade in st.session_state.active_trades[:]:
-        symbol = trade["symbol"]
-        df = get_candles(symbol, "5m")
-        price = get_price(symbol, df)
-        
-        trade["running_pnl"] = round(price - trade["entry_price"] if trade["side"] == "BUY" else trade["entry_price"] - price, 2)
-        
-        # Trailing & SL Logic
-        if trade["side"] == "BUY":
-            if price <= trade["sl"] or price >= trade["target"]: close_trade(trade, price)
-        else:
-            if price >= trade["sl"] or price <= trade["target"]: close_trade(trade, price)
-
-# ================= STRATEGIES =================
-def check_signals(symbol, df):
-    if len(df) < 21: return
-    
-    # --- EMA Strategy ---
+    # Indicators
     df["ema9"] = ema(df["close"], 9)
     df["ema21"] = ema(df["close"], 21)
-    prev, curr = df.iloc[-2], df.iloc[-1]
-    price = curr["close"]
+    
+    # ORB Calculation
+    df["dt"] = pd.to_datetime(df["time"], unit="s") + pd.Timedelta(hours=5, minutes=30)
+    df["t"] = df["dt"].dt.time
+    orb_df = df[(df["t"] >= dt_time(23,30)) | (df["t"] <= dt_time(0,30))]
+    
+    orb_high = float(orb_df["high"].max()) if not orb_df.empty else 0
+    orb_low = float(orb_df["low"].min()) if not orb_df.empty else 0
+    st.session_state.orb[symbol] = {"high": orb_high, "low": orb_low}
 
-    if not trade_exists(symbol, "EMA"):
-        if prev["ema9"] < prev["ema21"] and curr["ema9"] > curr["ema21"]:
-            st.session_state.active_trades.append({
-                "symbol": symbol, "side": "BUY", "entry_price": price,
-                "entry_time": datetime.now().strftime("%H:%M:%S"), "qty": calc_qty(price),
-                "strategy": "EMA BUY", "sl": price - 100, "target": price + 200,
-                "running_pnl": 0, "status": "OPEN"
-            })
-            send_telegram(f"📈 EMA BUY {symbol} @ {price}")
-        elif prev["ema9"] > prev["ema21"] and curr["ema9"] < curr["ema21"]:
-            st.session_state.active_trades.append({
-                "symbol": symbol, "side": "SELL", "entry_price": price,
-                "entry_time": datetime.now().strftime("%H:%M:%S"), "qty": calc_qty(price),
-                "strategy": "EMA SELL", "sl": price + 100, "target": price - 200,
-                "running_pnl": 0, "status": "OPEN"
-            })
-            send_telegram(f"📉 EMA SELL {symbol} @ {price}")
+    curr_p = float(df.iloc[-1]["close"])
+    e9 = round(df["ema9"].iloc[-1], 2)
+    e21 = round(df["ema21"].iloc[-1], 2)
+    prev_e9, prev_e21 = df["ema9"].iloc[-2], df["ema21"].iloc[-2]
 
-    # --- ORB Strategy ---
-    orb = st.session_state.orb.get(symbol)
-    if orb and not trade_exists(symbol, "ORB"):
-        if prev["close"] <= orb["high"] and curr["close"] > orb["high"]:
-            st.session_state.active_trades.append({
-                "symbol": symbol, "side": "BUY", "entry_price": price,
-                "entry_time": datetime.now().strftime("%H:%M:%S"), "qty": calc_qty(price),
-                "strategy": "ORB BUY", "sl": orb["low"], "target": price + 200,
-                "running_pnl": 0, "status": "OPEN"
-            })
-            send_telegram(f"🚀 ORB BUY {symbol}")
-        elif prev["close"] >= orb["low"] and curr["close"] < orb["low"]:
-            st.session_state.active_trades.append({
-                "symbol": symbol, "side": "SELL", "entry_price": price,
-                "entry_time": datetime.now().strftime("%H:%M:%S"), "qty": calc_qty(price),
-                "strategy": "ORB SELL", "sl": orb["high"], "target": price - 200,
-                "running_pnl": 0, "status": "OPEN"
-            })
-            send_telegram(f"🚀 ORB SELL {symbol}")
+    # Signal Generation (EMA Crossover + ORB Filter)
+    signal = "HOLD"
+    if prev_e9 < prev_e21 and e9 > e21 and curr_p > orb_high: signal = "LONG"
+    elif prev_e9 > prev_e21 and e9 < e21 and curr_p < orb_low: signal = "SHORT"
+
+    market_watch.append({
+        "SYMBOL": symbol, "PRICE": curr_p, "EMA 9": e9, "EMA 21": e21,
+        "ORB HIGH": orb_high, "ORB LOW": orb_low, "SIGNAL": signal
+    })
+
+    # --- EXECUTION ---
+    active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
+
+    if signal in ["LONG", "SHORT"] and active_t is None:
+        amt = TOTAL_CAPITAL * ALLOCATION[symbol]
+        qty = (amt * LEVERAGE) / curr_p
+        
+        target_move = curr_p * 0.01 # 1% Price move for 10% Profit (at 10x)
+        
+        new_trade = {
+            "pair": symbol, "side": signal, "entry": curr_p, "qty": round(qty, 4),
+            "sl": curr_p * 0.98 if signal == "LONG" else curr_p * 1.02,
+            "target_partial": curr_p + target_move if signal == "LONG" else curr_p - target_move,
+            "partial_done": False, "status": "OPEN", "time": datetime.now().strftime("%H:%M:%S")
+        }
+        st.session_state.trades.append(new_trade)
+        send_telegram(f"🚀 AUTO {signal} | {symbol}\nQty: {round(qty,4)} (10x)\nEntry: {curr_p}")
+
+    # --- MANAGEMENT (Partial Booking & Trailing) ---
+    for t in st.session_state.trades:
+        if t["status"] == "OPEN" and t["pair"] == symbol:
+            # Partial Booking at 1% Move
+            if not t["partial_done"]:
+                hit = (curr_p >= t["target_partial"]) if t["side"] == "LONG" else (curr_p <= t["target_partial"])
+                if hit:
+                    t["partial_done"] = True
+                    t["qty"] = t["qty"] / 2
+                    t["sl"] = t["entry"] # Move SL to Break-even
+                    send_telegram(f"💰 PARTIAL BOOKED {symbol}\n50% closed. SL moved to Entry.")
+
+            # Stop Loss Check
+            sl_hit = (curr_p <= t["sl"]) if t["side"] == "LONG" else (curr_p >= t["sl"])
+            if sl_hit:
+                t["status"], t["exit"] = "CLOSED", curr_p
+                send_telegram(f"❌ EXIT {symbol} @ {curr_p}")
 
 # ================= DASHBOARD UI =================
-st.title("🛡️ Universal Delta India Algo")
+st.title("🤖 Delta Pro Auto-Algo (10x Leverage)")
 
-for sym in SYMBOLS:
-    df_data = get_candles(sym)
-    if not df_data.empty:
-        update_orb(sym, df_data)
-        check_signals(sym, df_data)
+st.subheader("📊 Live Market Watch")
+st.table(pd.DataFrame(market_watch))
 
-manage_trades()
+st.divider()
 
-# Display Tables
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("📊 Active Trades")
-    st.title("🛡️ Universal Delta India Algo")
-
-for sym in SYMBOLS:
-    df_data = get_candles(sym)
-    if not df_data.empty:
-        update_orb(sym, df_data)
-        check_signals(sym, df_data)
-
-manage_trades()
-
-# Display Tables (Sahi Indentation ke saath)
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("📊 Active Trades")
-    if st.session_state.active_trades:
-        st.dataframe(pd.DataFrame(st.session_state.active_trades), use_container_width=True)
-    else:
-        st.info("No active trades right now.")
+    st.subheader("📊 Active Positions")
+    active_df = pd.DataFrame([t for t in st.session_state.trades if t["status"] == "OPEN"])
+    st.dataframe(active_df, use_container_width=True) if not active_df.empty else st.info("No active trades")
 
 with col2:
-    st.subheader("📒 Closed History")
-    if st.session_state.closed_trades:
-        st.dataframe(pd.DataFrame(st.session_state.closed_trades), use_container_width=True)
-    else:
-        st.info("History is empty.")
-
-# Auto-Refresh
-time.sleep(10)
-st.rerun()
+    st.subheader("📒 Trade History")
+    history_df = pd.DataFrame([t for t in st.session_state.trades if t["status"] == "CLOSED"])
+    st.dataframe(history_df, use_container_width=True) if not history_df.empty else st.info("History empty")
