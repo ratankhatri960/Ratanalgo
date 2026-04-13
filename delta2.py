@@ -138,42 +138,30 @@ symbol = st.selectbox(
 
 
 # ================= FETCH DATA =================
-candles = get_delta_candles(symbol)
+df = get_candles(symbol) # Purana stable data fetcher
 
-if not candles:
-    st.warning(f"Waiting for data from Delta India for {symbol}...")
-    st.stop()
+if not df.empty:
+    # 1. Indicators calculate honge (Wahi purane wale)
+    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+    df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+    
+    # 2. Strategy Check (Aapka FVG logic)
+    bullish_fvg, bearish_fvg = detect_fvg(df) # FVG yahan detect hoga
+    
+    # 3. Signal Generation (Wahi logic jo aapne delta2.py mein likha tha)
+    price = df.iloc[-1]["close"]
+    ema20 = df["EMA20"].iloc[-1]
+    ema50 = df["EMA50"].iloc[-1]
+    vwap = df["VWAP"].iloc[-1]
 
-df = pd.DataFrame(candles)
-
-# Column names fix karne ka safe tarika (Direct mapping)
-# Delta India usually returns: 'start_time', 'open', 'high', 'low', 'close', 'volume'
-rename_map = {
-    "start_time": "time",
-    "time": "time",
-    "open": "open",
-    "high": "high",
-    "low": "low",
-    "close": "close",
-    "volume": "volume"
-}
-df = df.rename(columns=rename_map)
-
-# Jo columns dashboard ke liye zaroori hain sirf unhe numeric banayein
-cols_to_fix = ["open", "high", "low", "close", "volume"]
-for col in cols_to_fix:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-# Time convert karein
-if "time" in df.columns:
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-else:
-    # Agar 'time' column nahi mila toh error handle karein
-    st.error("Time column not found in API response")
-    st.stop()
-
-df = df.dropna(subset=["close"]) # Basic cleanup
+    # Aapka exact logic:
+    if price > vwap and ema20 > ema50 and bullish_fvg:
+        signal = "BUY"
+    elif price < vwap and ema20 < ema50 and bearish_fvg:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
 # ================= INDICATORS =================
 df["EMA20"] = df["close"].ewm(span=20).mean()
 
