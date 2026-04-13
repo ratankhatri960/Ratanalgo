@@ -3,5 +3,5 @@ pandas
 requests
 dhanhq
 ccxt
-streamlit-autorefresh
+streamlit-autorefresh==0.0.1
 plotly
