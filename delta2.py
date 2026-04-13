@@ -15,7 +15,7 @@ st_autorefresh(interval=10000, key="refresh")
 # Risk Settings
 TOTAL_CAPITAL = 1000
 ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40}
-LEVERAGE = 10
+LEVERAGE = 25
 
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
