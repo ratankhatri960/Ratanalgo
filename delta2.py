@@ -38,22 +38,30 @@ def send_telegram(msg):
 
 
 # ================= DELTA API FETCH =================
-def get_delta_candles(symbol="BTCUSDT", resolution="5m"):
+ddef get_delta_candles(symbol="BTCUSD", resolution="5m"):
+    try:
+        # Delta India API URL
+        url = "https://delta.exchange"
+        
+        params = {
+            "symbol": symbol,
+            "resolution": resolution,
+            "add_fvg": True # Agar FVG chahiye toh
+        }
 
-    url = "https://api.india.delta.exchange/v2/history/candles"
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
 
-    params = {
-        "symbol": symbol,
-        "resolution": resolution
-    }
-
-    response = requests.get(url, params=params)
-
-    data = response.json()
-
-    return data["result"]
-
-
+        # Check if 'result' exists in response
+        if "result" in data:
+            return data["result"]
+        else:
+            st.error(f"API Error: {data.get('error', 'Unknown Error')}")
+            return [] # Return empty list if no result
+            
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
+        return []
 # ================= FVG DETECTION =================
 def detect_fvg(df):
 
