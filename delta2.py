@@ -1,127 +1,131 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 import requests
 import time
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-# ================= CONFIG =================
-st.set_page_config(layout="wide", page_title="Delta Pro FVG Bot")
-st.title("🚀 Delta Pro Dashboard (FVG + EMA)")
+# ================= CONFIG & ALLOCATION =================
+st.set_page_config(layout="wide", page_title="Delta AI Pro Engine")
+st.title("🤖 Delta Pro Auto-Execution (10x Leverage)")
 
-# Auto-refresh every 10 seconds
+# Dashboard refresh rate (10 seconds)
 st_autorefresh(interval=10000, key="refresh")
 
-# SECRETS (From Streamlit Cloud Settings)
+# Risk Settings
+TOTAL_CAPITAL = 1000
+ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40}
+LEVERAGE = 10
+
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
-BASE_URL = "https://api.india.delta.exchange"
+BASE_URL = "https://delta.exchange"
 
-# ================= FUNCTIONS =================
+# ================= CORE FUNCTIONS =================
 def send_telegram(msg):
     try:
         if not TELEGRAM_TOKEN or not CHAT_ID: return
-        url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
+        requests.post(f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage", 
+                      data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
     except: pass
 
 def get_candles(symbol, tf="5m"):
     try:
         now = int(time.time())
-        r = requests.get(
-            f"{BASE_URL}/v2/history/candles",
-            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now},
-            timeout=10
-        ).json()
-        if "result" not in r: return pd.DataFrame()
+        r = requests.get(f"{BASE_URL}/v2/history/candles",
+            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now}, timeout=10).json()
         df = pd.DataFrame(r["result"]).sort_values("time")
         for c in ["open","high","low","close","volume"]:
-            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
-        if "time" in df.columns: df["time"] = pd.to_datetime(df["time"], unit="s")
+            df[c] = pd.to_numeric(df[c], errors="coerce")
         return df.dropna()
     except: return pd.DataFrame()
 
 def detect_fvg(df):
-    bullish_fvg, bearish_fvg = False, False
-    if len(df) < 3: return bullish_fvg, bearish_fvg
-    if df.iloc[-3]["high"] < df.iloc[-1]["low"]: bullish_fvg = True
-    if df.iloc[-3]["low"] > df.iloc[-1]["high"]: bearish_fvg = True
-    return bullish_fvg, bearish_fvg
+    if len(df) < 3: return False, False
+    bull = df.iloc[-3]["high"] < df.iloc[-1]["low"]
+    bear = df.iloc[-3]["low"] > df.iloc[-1].high
+    return bull, bear
 
 # ================= SESSION STATE =================
 if "trades" not in st.session_state: st.session_state.trades = []
-if "last_signal" not in st.session_state: st.session_state.last_signal = None
 
-# ================= UI =================
-symbol = st.selectbox("Select Pair", ["BTCUSD", "ETHUSD"])
+# ================= ENGINE & DATA PROCESSING =================
+market_watch_data = []
 
-# ================= MAIN LOGIC =================
-df = get_candles(symbol)
+for symbol in ["BTCUSD", "ETHUSD"]:
+    df = get_candles(symbol)
+    if df.empty: continue
 
-if not df.empty:
-    # 1. INDICATORS
+    # Indicators Calculation
     df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
-    current_price = float(df.iloc[-1]["close"])
-    ema20 = df["EMA20"].iloc[-1]
-    ema50 = df["EMA50"].iloc[-1]
-    vwap = df["VWAP"].iloc[-1]
+    curr_p = float(df.iloc[-1]["close"])
+    ema20 = round(df["EMA20"].iloc[-1], 2)
+    ema50 = round(df["EMA50"].iloc[-1], 2)
+    vwap = round(df["VWAP"].iloc[-1], 2)
     bull_fvg, bear_fvg = detect_fvg(df)
 
-    # 2. SIGNAL GENERATOR
+    # Signal Logic
     signal = "HOLD"
-    if current_price > vwap and ema20 > ema50 and bull_fvg: signal = "BUY"
-    elif current_price < vwap and ema20 < ema50 and bear_fvg: signal = "SELL"
+    if curr_p > vwap and ema20 > ema50 and bull_fvg: signal = "BUY"
+    elif curr_p < vwap and ema20 < ema50 and bear_fvg: signal = "SELL"
 
-    # 3. ACTIVE TRADE CHECK
-    active_trade = next((t for t in st.session_state.trades if t["status"] == "OPEN"), None)
+    # Add to Market Watch Table
+    market_watch_data.append({
+        "SYMBOL": symbol,
+        "LIVE PRICE": curr_p,
+        "EMA 20": ema20,
+        "EMA 50": ema50,
+        "VWAP": vwap,
+        "SIGNAL": signal
+    })
 
-    # 4. NEW ENTRY
-    if signal in ["BUY", "SELL"] and active_trade is None:
-        trade = {
-            "pair": symbol, "signal": signal, "entry": current_price,
-            "sl": current_price - 200 if signal == "BUY" else current_price + 200,
-            "target": current_price + 400 if signal == "BUY" else current_price - 400,
-            "status": "OPEN", "time": datetime.now().strftime("%H:%M")
+    # --- TRADING LOGIC (Auto 10x Leverage + Partial Booking) ---
+    active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
+
+    if signal in ["BUY", "SELL"] and active_t is None:
+        allocated_amt = TOTAL_CAPITAL * ALLOCATION[symbol]
+        pos_size = (allocated_amt * LEVERAGE) / curr_p
+        
+        target_dist = curr_p * 0.01 # 1% Target for Partial
+        
+        new_trade = {
+            "pair": symbol, "side": signal, "entry": curr_p, "qty": round(pos_size, 4),
+            "sl": curr_p * 0.98 if signal == "BUY" else curr_p * 1.02,
+            "target1": round(curr_p + target_dist if signal == "BUY" else curr_p - target_dist, 2),
+            "partial_done": False, "status": "OPEN", "time": datetime.now().strftime("%H:%M")
         }
-        st.session_state.trades.append(trade)
-        if st.session_state.last_signal != signal:
-            send_telegram(f"🚀 NEW SIGNAL\nPair: {symbol}\nSignal: {signal}\nEntry: {current_price}")
-            st.session_state.last_signal = signal
+        st.session_state.trades.append(new_trade)
+        send_telegram(f"🚀 AUTO {signal} | {symbol}\nSize: {round(pos_size, 4)} units (10x)\nEntry: {curr_p}")
 
-    # 5. MANAGE TRADES (Trailing/Exit)
+    # Trade Management
     for t in st.session_state.trades:
-        if t["status"] == "OPEN":
-            if t["signal"] == "BUY":
-                if current_price <= t["sl"] or current_price >= t["target"]:
-                    t["status"], t["exit"] = ("SL HIT" if current_price <= t["sl"] else "TARGET HIT"), current_price
-                    send_telegram(f"✅ Closed BUY {symbol} @ {current_price}")
-            else:
-                if current_price >= t["sl"] or current_price <= t["target"]:
-                    t["status"], t["exit"] = ("SL HIT" if current_price >= t["sl"] else "TARGET HIT"), current_price
-                    send_telegram(f"✅ Closed SELL {symbol} @ {current_price}")
+        if t["status"] == "OPEN" and t["pair"] == symbol:
+            if not t["partial_done"]:
+                hit = (curr_p >= t["target1"]) if t["side"] == "BUY" else (curr_p <= t["target1"])
+                if hit:
+                    t["partial_done"] = True
+                    t["qty"] = t["qty"] / 2
+                    t["sl"] = t["entry"]
+                    send_telegram(f"💰 PARTIAL BOOKED {symbol}\n50% sold. SL at Cost.")
 
-    # 6. CHART
-    fig = go.Figure(data=[go.Candlestick(x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Candles")])
-    fig.add_trace(go.Scatter(x=df["time"], y=df["EMA20"], mode="lines", name="EMA20", line=dict(color='yellow')))
-    fig.add_trace(go.Scatter(x=df["time"], y=df["EMA50"], mode="lines", name="EMA50", line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=df["time"], y=df["VWAP"], mode="lines", name="VWAP", line=dict(color='white')))
-    st.plotly_chart(fig, use_container_width=True)
+            # Stop Loss / Exit Check
+            sl_hit = (curr_p <= t["sl"]) if t["side"] == "BUY" else (curr_p >= t["sl"])
+            if sl_hit:
+                t["status"], t["exit"] = "CLOSED", curr_p
+                send_telegram(f"❌ EXIT {symbol} @ {curr_p}")
 
-    # 7. ANALYTICS
-    wins = len([t for t in st.session_state.trades if t["status"] == "TARGET HIT"])
-    losses = len([t for t in st.session_state.trades if t["status"] == "SL HIT"])
-    st.subheader("📊 Performance")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Wins", wins)
-    c2.metric("Losses", losses)
-    c3.metric("Win Rate", f"{round(wins/(wins+losses)*100, 2) if (wins+losses)>0 else 0}%")
+# ================= DASHBOARD UI =================
+st.subheader("📊 Live Market Watch")
+if market_watch_data:
+    st.table(pd.DataFrame(market_watch_data)) # Table for Live Data
 
-    st.subheader("📊 Trade History")
-    st.dataframe(pd.DataFrame(st.session_state.trades) if st.session_state.trades else "No trades yet.")
+st.divider()
 
+st.subheader("📋 Master Order Book (Active & History)")
+if st.session_state.trades:
+    st.dataframe(pd.DataFrame(st.session_state.trades), use_container_width=True)
 else:
-    st.warning("Waiting for Delta India API Data...")
+    st.info("Searching for signals in BTC & ETH...")
