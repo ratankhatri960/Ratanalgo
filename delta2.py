@@ -138,46 +138,29 @@ symbol = st.selectbox(
 
 
 # ================= FETCH DATA =================
-df = get_candles(symbol) # Purana stable data fetcher
+df = get_candles(symbol) # Purana stable fetcher use ho raha hai
 
 if not df.empty:
-    # 1. Indicators calculate honge (Wahi purane wale)
+    # 1. INDICATORS (Clean & Single Calculation)
     df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
-    # 2. Strategy Check (Aapka FVG logic)
-    bullish_fvg, bearish_fvg = detect_fvg(df) # FVG yahan detect hoga
+    # 2. STRATEGY CHECK (FVG Logic)
+    bullish_fvg, bearish_fvg = detect_fvg(df)
     
-    # 3. Signal Generation (Wahi logic jo aapne delta2.py mein likha tha)
-    price = df.iloc[-1]["close"]
+    # 3. SIGNAL GENERATOR
+    current_price = float(df.iloc[-1]["close"])
     ema20 = df["EMA20"].iloc[-1]
     ema50 = df["EMA50"].iloc[-1]
     vwap = df["VWAP"].iloc[-1]
 
-    # Aapka exact logic:
-    if price > vwap and ema20 > ema50 and bullish_fvg:
+    if current_price > vwap and ema20 > ema50 and bullish_fvg:
         signal = "BUY"
-    elif price < vwap and ema20 < ema50 and bearish_fvg:
+    elif current_price < vwap and ema20 < ema50 and bearish_fvg:
         signal = "SELL"
     else:
         signal = "HOLD"
-# ================= INDICATORS =================
-df["EMA20"] = df["close"].ewm(span=20).mean()
-
-df["EMA50"] = df["close"].ewm(span=50).mean()
-
-df["VWAP"] = (
-    (df["close"] * df["volume"]).cumsum()
-    /
-    df["volume"].cumsum()
-)
-
-
-# ================= SIGNAL =================
-signal = generate_signal(df)
-
-current_price = float(df.iloc[-1]["close"])
 
 
 # ================= ACTIVE TRADE =================
