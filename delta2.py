@@ -38,30 +38,41 @@ def send_telegram(msg):
 
 
 # ================= DELTA API FETCH =================
-def get_delta_candles(symbol="BTCUSD", resolution="5m"):
+def get_candles(symbol, tf="5m"):
     try:
-        # Delta India API URL
-        url = "https://api.india.delta.exchange"
+        now = int(time.time())
+        # Delta India API stable call
+        r = requests.get(
+            f"{BASE_URL}/v2/history/candles",
+            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now},
+            timeout=10
+        ).json()
         
-        params = {
-            "symbol": symbol,
-            "resolution": resolution,
-            "add_fvg": True # Agar FVG chahiye toh
-        }
-
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-
-        # Check if 'result' exists in response
-        if "result" in data:
-            return data["result"]
-        else:
-            st.error(f"API Error: {data.get('error', 'Unknown Error')}")
-            return [] # Return empty list if no result
+        if "result" not in r: 
+            return pd.DataFrame()
             
+        df = pd.DataFrame(r["result"]).sort_values("time")
+        
+        # Column names fix for Delta India
+        for c in ["open","high","low","close","volume"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        
+        # 'time' column conversion
+        if "time" in df.columns:
+            df["time"] = pd.to_datetime(df["time"], unit="s")
+            
+        return df.dropna()
     except Exception as e:
-        st.error(f"Connection Error: {e}")
-        return []
+        st.sidebar.error(f"Fetch Error: {e}")
+        return pd.DataFrame()
+
+def get_price(symbol, df):
+    try:
+        r = requests.get(f"{BASE_URL}/v2/tickers/{symbol}", timeout=5).json()
+        return float(r["result"]["close"])
+    except:
+        return float(df.iloc[-1]["close"]) if not df.empty else 0
 # ================= FVG DETECTION =================
 def detect_fvg(df):
 
