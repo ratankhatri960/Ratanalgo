@@ -5,7 +5,13 @@ try:
 except ImportError:
     st.error("Plotly install nahi hui h. Please check requirements.txt")
 import requests
-from streamlit_autorefresh import st_autorefresh
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st.error("Error: streamlit-autorefresh install nahi hui h. requirements.txt check karein.")
+    # Dummy function taaki niche ka code crash na ho
+    def st_autorefresh(**kwargs):
+        pass
 
 
 # ================= CONFIG =================
