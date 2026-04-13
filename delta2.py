@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    st.error("Plotly install nahi hui h. Please check requirements.txt")
 import requests
 from streamlit_autorefresh import st_autorefresh
 
