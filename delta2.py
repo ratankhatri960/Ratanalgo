@@ -16,7 +16,7 @@ st_autorefresh(interval=10000, key="refresh")
 # SECRETS (From Streamlit Cloud Settings)
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # ================= FUNCTIONS =================
 def send_telegram(msg):
