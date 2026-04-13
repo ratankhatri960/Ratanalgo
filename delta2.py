@@ -129,20 +129,40 @@ symbol = st.selectbox(
 # ================= FETCH DATA =================
 candles = get_delta_candles(symbol)
 
+if not candles:
+    st.warning(f"Waiting for data from Delta India for {symbol}...")
+    st.stop()
+
 df = pd.DataFrame(candles)
 
-df.columns = [
-    "time",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume"
-]
+# Column names fix karne ka safe tarika (Direct mapping)
+# Delta India usually returns: 'start_time', 'open', 'high', 'low', 'close', 'volume'
+rename_map = {
+    "start_time": "time",
+    "time": "time",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "volume": "volume"
+}
+df = df.rename(columns=rename_map)
 
-df["time"] = pd.to_datetime(df["time"], unit="s")
+# Jo columns dashboard ke liye zaroori hain sirf unhe numeric banayein
+cols_to_fix = ["open", "high", "low", "close", "volume"]
+for col in cols_to_fix:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
+# Time convert karein
+if "time" in df.columns:
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+else:
+    # Agar 'time' column nahi mila toh error handle karein
+    st.error("Time column not found in API response")
+    st.stop()
 
+df = df.dropna(subset=["close"]) # Basic cleanup
 # ================= INDICATORS =================
 df["EMA20"] = df["close"].ewm(span=20).mean()
 
