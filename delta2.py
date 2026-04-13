@@ -41,7 +41,7 @@ def send_telegram(msg):
 def get_delta_candles(symbol="BTCUSD", resolution="5m"):
     try:
         # Delta India API URL
-        url = "https://delta.exchange"
+        url = "https://api.india.delta.exchange"
         
         params = {
             "symbol": symbol,
