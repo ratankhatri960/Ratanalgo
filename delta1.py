@@ -163,11 +163,19 @@ manage_trades()
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("📊 Active Trades")
-    st.dataframe(pd.DataFrame(st.session_state.active_trades) if st.session_state.active_trades else "No active trades")
+    swith col1:
+    st.subheader("📊 Active Trades")
+    if st.session_state.active_trades:
+        st.dataframe(pd.DataFrame(st.session_state.active_trades), use_container_width=True)
+    else:
+        st.info("No active trades right now.")
+
 with col2:
     st.subheader("📒 Closed History")
-    st.dataframe(pd.DataFrame(st.session_state.closed_trades) if st.session_state.closed_trades else "History empty")
-
+    if st.session_state.closed_trades:
+        st.dataframe(pd.DataFrame(st.session_state.closed_trades), use_container_width=True)
+    else:
+        st.info("History is empty.")
 # Auto-Refresh
 time.sleep(10)
 st.rerun()
