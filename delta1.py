@@ -163,7 +163,20 @@ manage_trades()
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("📊 Active Trades")
-    with col1:
+    st.title("🛡️ Universal Delta India Algo")
+
+for sym in SYMBOLS:
+    df_data = get_candles(sym)
+    if not df_data.empty:
+        update_orb(sym, df_data)
+        check_signals(sym, df_data)
+
+manage_trades()
+
+# Display Tables (Sahi Indentation ke saath)
+col1, col2 = st.columns(2)
+
+with col1:
     st.subheader("📊 Active Trades")
     if st.session_state.active_trades:
         st.dataframe(pd.DataFrame(st.session_state.active_trades), use_container_width=True)
@@ -176,7 +189,7 @@ with col2:
         st.dataframe(pd.DataFrame(st.session_state.closed_trades), use_container_width=True)
     else:
         st.info("History is empty.")
+
 # Auto-Refresh
 time.sleep(10)
 st.rerun()
-
