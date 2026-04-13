@@ -163,7 +163,7 @@ manage_trades()
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("📊 Active Trades")
-    swith col1:
+    with col1:
     st.subheader("📊 Active Trades")
     if st.session_state.active_trades:
         st.dataframe(pd.DataFrame(st.session_state.active_trades), use_container_width=True)
