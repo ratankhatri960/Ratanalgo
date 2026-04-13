@@ -138,18 +138,23 @@ symbol = st.selectbox(
 
 
 # ================= FETCH DATA =================
-df = get_candles(symbol) # Purana stable fetcher use ho raha hai
+symbol = st.selectbox("Select Pair", ["BTCUSD", "ETHUSD"])
+
+# 1. PEHLE VARIABLES DEFINE KAREIN (Taki error na aaye)
+signal = "HOLD"
+current_price = 0
+df = pd.DataFrame()
+
+# 2. DATA FETCH KAREIN
+df = get_candles(symbol)
 
 if not df.empty:
-    # 1. INDICATORS (Clean & Single Calculation)
+    # Saara logic yahan (Jo maine pehle diya tha)
     df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
-    # 2. STRATEGY CHECK (FVG Logic)
     bullish_fvg, bearish_fvg = detect_fvg(df)
-    
-    # 3. SIGNAL GENERATOR
     current_price = float(df.iloc[-1]["close"])
     ema20 = df["EMA20"].iloc[-1]
     ema50 = df["EMA50"].iloc[-1]
@@ -161,6 +166,13 @@ if not df.empty:
         signal = "SELL"
     else:
         signal = "HOLD"
+
+    # --- AB LINE 177 WALA TRADING LOGIC BHI ISI BLOCK MEIN RAKHEIN ---
+    # (Pura code jo maine last message mein diya tha)
+    
+else:
+    st.warning("Data fetch nahi ho raha...")
+    st.stop() # YE LINE ZAROORI HAI: Taki code aage na badhe
 
 
 # ================= ACTIVE TRADE =================
