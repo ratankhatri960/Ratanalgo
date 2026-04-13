@@ -174,7 +174,7 @@ active_trade = next(
 
 
 # ================= NEW ENTRY =================
-if signal in ["BUY", "SELL"] and active_trade is None:
+    if signal in ["BUY", "SELL"] and active_trade is None:
 
     trade = {
         "pair": symbol,
