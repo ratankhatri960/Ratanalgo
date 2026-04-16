@@ -2,140 +2,166 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
-from datetime import datetime, time as dt_time
+import os
+from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-# ================= CONFIG & RISK =================
-st.set_page_config(layout="wide", page_title="Delta Pro Auto-Bot")
-st_autorefresh(interval=10000, key="refresh") # 10 sec refresh
+# ================= 1. CONFIG & ALLOCATION =================
+st.set_page_config(layout="wide", page_title="Delta AI Pro Engine")
+st.title("🤖 Delta Pro Auto-Execution (History Enabled)")
 
-BASE_URL = "https://api.india.delta.exchange"
-SYMBOLS = ["BTCUSD", "ETHUSD"]
-TOTAL_CAPITAL = 1000  
-ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40} 
+# Auto refresh every 10 seconds
+st_autorefresh(interval=10000, key="refresh")
+
+# Risk & Strategy Settings
+TOTAL_CAPITAL = 1000
+ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40}
 LEVERAGE = 25
+CSV_FILE = "trade_history_v2.csv"
 
+# Secrets (Make sure these are in your .streamlit/secrets.toml)
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+BASE_URL = "https://delta.exchange"
 
-# ================= SESSION INIT =================
-if "trades" not in st.session_state: st.session_state.trades = []
-if "orb" not in st.session_state: st.session_state.orb = {}
+# ================= 2. CORE FUNCTIONS =================
+def load_data():
+    """CSV se purani trades load karne ke liye"""
+    if os.path.exists(CSV_FILE):
+        try:
+            return pd.read_csv(CSV_FILE).to_dict('records')
+        except:
+            return []
+    return []
 
-# ================= FUNCTIONS =================
+def save_data(trades):
+    """Trades ko CSV mein permanent save karne ke liye"""
+    if trades:
+        pd.DataFrame(trades).to_csv(CSV_FILE, index=False)
+
 def send_telegram(msg):
+    """Telegram alert function"""
     try:
-        if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+        if not TELEGRAM_TOKEN or not CHAT_ID: return
         url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
     except: pass
 
 def get_candles(symbol, tf="5m"):
+    """Market data fetch karne ke liye"""
     try:
         now = int(time.time())
-        # Delta India API: History Candles
         r = requests.get(f"{BASE_URL}/v2/history/candles",
             params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now}, timeout=10).json()
-        
-        if "result" not in r or not r["result"]:
-            return pd.DataFrame()
-            
         df = pd.DataFrame(r["result"]).sort_values("time")
         for c in ["open","high","low","close","volume"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
         return df.dropna()
-    except Exception as e:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def ema(series, n):
-    return series.ewm(span=n, adjust=False).mean()
+def detect_fvg(df):
+    """Fair Value Gap Detection"""
+    if len(df) < 3: return False, False
+    bull = df.iloc[-3]["high"] < df.iloc[-1]["low"]
+    bear = df.iloc[-3]["low"] > df.iloc[-1].high
+    return bull, bear
 
-# ================= ENGINE LOGIC =================
-st.title("🤖 Delta Pro Auto-Algo (10x Leverage)")
+# ================= 3. SESSION STATE =================
+if "trades" not in st.session_state:
+    st.session_state.trades = load_data()
 
-market_watch = []
+# ================= 4. ENGINE & DATA PROCESSING =================
+market_watch_data = []
 
-for symbol in SYMBOLS:
+for symbol in ["BTCUSD", "ETHUSD"]:
     df = get_candles(symbol)
-    
-    if df.empty:
-        # Agar data nahi aa raha toh table mein 'N/A' dikhayega
-        market_watch.append({"SYMBOL": symbol, "PRICE": "Waiting...", "EMA 9": "N/A", "EMA 21": "N/A", "SIGNAL": "No Connection"})
-        continue
+    if df.empty: continue
 
-    # 1. INDICATORS
-    df["ema9"] = ema(df["close"], 9)
-    df["ema21"] = ema(df["close"], 21)
+    # Indicators
+    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+    df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
-    # 2. ORB (Opening Range Breakout)
-    df["dt"] = pd.to_datetime(df["time"], unit="s") + pd.Timedelta(hours=5, minutes=30)
-    df["t"] = df["dt"].dt.time
-    orb_df = df[(df["t"] >= dt_time(23,30)) | (df["t"] <= dt_time(0,30))]
-    
-    oh = float(orb_df["high"].max()) if not orb_df.empty else 0
-    ol = float(orb_df["low"].min()) if not orb_df.empty else 0
-    st.session_state.orb[symbol] = {"high": oh, "low": ol}
-
-    # 3. CURRENT VALUES
     curr_p = float(df.iloc[-1]["close"])
-    e9 = round(df["ema9"].iloc[-1], 2)
-    e21 = round(df["ema21"].iloc[-1], 2)
-    prev_e9, prev_e21 = df["ema9"].iloc[-2], df["ema21"].iloc[-2]
+    ema20 = round(df["EMA20"].iloc[-1], 2)
+    ema50 = round(df["EMA50"].iloc[-1], 2)
+    vwap = round(df["VWAP"].iloc[-1], 2)
+    bull_fvg, bear_fvg = detect_fvg(df)
 
-    # 4. SIGNAL
+    # Signal Logic
     signal = "HOLD"
-    if prev_e9 < prev_e21 and e9 > e21 and curr_p > oh: signal = "LONG"
-    elif prev_e9 > prev_e21 and e9 < e21 and curr_p < ol: signal = "SHORT"
+    if curr_p > vwap and ema20 > ema50 and bull_fvg: signal = "BUY"
+    elif curr_p < vwap and ema20 < ema50 and bear_fvg: signal = "SELL"
 
-    market_watch.append({
-        "SYMBOL": symbol, "PRICE": curr_p, "EMA 9": e9, "EMA 21": e21,
-        "ORB HIGH": oh, "ORB LOW": ol, "SIGNAL": signal
+    market_watch_data.append({
+        "SYMBOL": symbol, "LIVE PRICE": curr_p, 
+        "EMA 20": ema20, "EMA 50": ema50, 
+        "VWAP": vwap, "SIGNAL": signal
     })
 
-    # 5. TRADING EXECUTION
+    # --- TRADING LOGIC ---
     active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
 
-    if signal in ["LONG", "SHORT"] and active_t is None:
-        qty = (TOTAL_CAPITAL * ALLOCATION[symbol] * LEVERAGE) / curr_p
-        t_dist = curr_p * 0.01 # 1% Target
+    if signal in ["BUY", "SELL"] and active_t is None:
+        allocated_amt = TOTAL_CAPITAL * ALLOCATION[symbol]
+        pos_size = (allocated_amt * LEVERAGE) / curr_p
+        target_dist = curr_p * 0.01 
         
-        st.session_state.trades.append({
-            "pair": symbol, "side": signal, "entry": curr_p, "qty": round(qty, 4),
-            "sl": curr_p * 0.98 if signal == "LONG" else curr_p * 1.02,
-            "t1": curr_p + t_dist if signal == "LONG" else curr_p - t_dist,
-            "partial_done": False, "status": "OPEN", "time": datetime.now().strftime("%H:%M")
-        })
-        send_telegram(f"🚀 AUTO {signal} | {symbol} @ {curr_p}")
+        new_trade = {
+            "pair": symbol, "side": signal, "entry": curr_p, "qty": round(pos_size, 4),
+            "sl": round(curr_p * 0.98 if signal == "BUY" else curr_p * 1.02, 2),
+            "target1": round(curr_p + target_dist if signal == "BUY" else curr_p - target_dist, 2),
+            "partial_done": False, "status": "OPEN", 
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"), "exit_price": None
+        }
+        st.session_state.trades.append(new_trade)
+        save_data(st.session_state.trades)
+        send_telegram(f"🚀 NEW {signal} | {symbol}\nPrice: {curr_p}\nSize: {round(pos_size, 4)}")
 
-    # 6. MANAGEMENT
+    # --- TRADE MANAGEMENT (EXIT & PARTIAL) ---
     for t in st.session_state.trades:
         if t["status"] == "OPEN" and t["pair"] == symbol:
+            # Check Partial Target
             if not t["partial_done"]:
-                hit = (curr_p >= t["t1"]) if t["side"] == "LONG" else (curr_p <= t["t1"])
+                hit = (curr_p >= t["target1"]) if t["side"] == "BUY" else (curr_p <= t["target1"])
                 if hit:
-                    t["partial_done"], t["qty"], t["sl"] = True, t["qty"]/2, t["entry"]
-                    send_telegram(f"💰 PARTIAL BOOKED {symbol}")
+                    t["partial_done"] = True
+                    t["qty"] = t["qty"] / 2
+                    t["sl"] = t["entry"] # SL to Break Even
+                    save_data(st.session_state.trades)
+                    send_telegram(f"💰 PARTIAL BOOKED {symbol}\nSL moved to Entry.")
 
-            if (curr_p <= t["sl"] if t["side"] == "LONG" else curr_p >= t["sl"]):
-                t["status"], t["exit"] = "CLOSED", curr_p
-                send_telegram(f"❌ EXIT {symbol} @ {curr_p}")
+            # Check Stop Loss
+            sl_hit = (curr_p <= t["sl"]) if t["side"] == "BUY" else (curr_p >= t["sl"])
+            if sl_hit:
+                t["status"] = "CLOSED"
+                t["exit_price"] = curr_p
+                save_data(st.session_state.trades)
+                send_telegram(f"❌ CLOSED {symbol} @ {curr_p}")
 
-# ================= DASHBOARD UI =================
-st.subheader("📊 Live Market Watch")
-if market_watch:
-    st.table(pd.DataFrame(market_watch))
-else:
-    st.warning("Connecting to Delta API...")
+# ================= 5. DASHBOARD UI =================
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("📊 Live Market Watch")
+    if market_watch_data:
+        st.table(pd.DataFrame(market_watch_data))
+
+with col2:
+    st.subheader("⚙️ System Status")
+    st.success("Engine is Running...")
+    st.info(f"Capital: ${TOTAL_CAPITAL} | Leverage: {LEVERAGE}x")
 
 st.divider()
 
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("📊 Active Trades")
-    active_df = pd.DataFrame([t for t in st.session_state.trades if t["status"] == "OPEN"])
-    st.dataframe(active_df, use_container_width=True)
-
-with c2:
-    st.subheader("📒 History")
-    hist_df = pd.DataFrame([t for t in st.session_state.trades if t["status"] == "CLOSED"])
-    st.dataframe(hist_df, use_container_width=True)
+st.subheader("📋 Master Order Book (History)")
+if st.session_state.trades:
+    # Reverse display: Latest trades first
+    df_history = pd.DataFrame(st.session_state.trades).iloc[::-1]
+    st.dataframe(df_history, use_container_width=True)
+    
+    # Download Button
+    csv_data = pd.DataFrame(st.session_state.trades).to_csv(index=False)
+    st.download_button("📥 Export History", csv_data, "trade_history.csv", "text/csv")
+else:
+    st.info("No trades in history. Waiting for signals...")
