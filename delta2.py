@@ -109,7 +109,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     market_watch.append({
         "SYMBOL": symbol, "PRICE": curr_p, 
         "EMA20": round(curr["EMA20"], 2), "SIGNAL": signal,
-        "STATUS": "⚡ TRIGGERED" if is_fresh_setup else "WAITING/OLD"
+        "STATUS": "⚡ TRIGGERED" if is_fresh_setup else "HOLD"
     })
 
     # --- EXECUTION (Only on Fresh Setup) ---
