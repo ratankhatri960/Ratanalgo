@@ -15,7 +15,7 @@ st_autorefresh(interval=15000, key="refresh") # 15s refresh for 1H TF
 TOTAL_CAPITAL = 1000
 LEVERAGE = 10  # Swing ke liye 10x is safer
 CSV_FILE = "swing_history.csv"
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # ================= 2. FUNCTIONS =================
 def load_data():
