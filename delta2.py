@@ -8,18 +8,20 @@ from streamlit_autorefresh import st_autorefresh
 
 # ================= 1. CONFIG & SETTINGS =================
 st.set_page_config(layout="wide", page_title="Delta AI Pro Engine")
-st.title("🤖 Delta Pro: Fresh Setup + Live P&L")
+st.title("🤖 Delta AI Pro: Smart Trailing & P&L")
 
-# Dashboard refresh every 10 seconds
-st_autorefresh(interval=10000, key="refresh")
+st_autorefresh(interval=5000, key="refresh") # 5 sec refresh to reduce SL gap
 
-# Risk Settings
 TOTAL_CAPITAL = 1000
 ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40}
 LEVERAGE = 25
 CSV_FILE = "final_trade_history.csv"
 
-# Credentials
+# Percentages based on Trade Value
+SL_PCT = 0.005        # 0.5% Stop Loss
+T1_PCT = 0.005        # 0.5% Target 1
+SECURE_PCT = 0.00025  # 0.025% Profit Lock (Trailing)
+
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
 BASE_URL = "https://api.india.delta.exchange"
@@ -40,7 +42,6 @@ def save_data(trades):
 def send_telegram(msg):
     try:
         if not TELEGRAM_TOKEN or not CHAT_ID: return
-        # Fix: Proper Telegram URL
         url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
     except: pass
@@ -69,7 +70,6 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     df = get_candles(symbol)
     if df.empty or len(df) < 5: continue
 
-    # Indicators
     df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
@@ -79,11 +79,9 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     curr_p = float(curr["close"])
     vwap_val = round(curr["VWAP"], 2)
     
-    # FVG Detection
     bull_fvg = df.iloc[-3]["high"] < df.iloc[-1]["low"]
     bear_fvg = df.iloc[-3]["low"] > df.iloc[-1].high
 
-    # SIGNAL LOGIC
     is_bull = curr_p > vwap_val and curr["EMA20"] > curr["EMA50"] and bull_fvg
     is_bear = curr_p < vwap_val and curr["EMA20"] < curr["EMA50"] and bear_fvg
     
@@ -92,7 +90,6 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 
     signal = "HOLD"
     is_fresh_setup = False
-
     if is_bull:
         signal = "BUY"
         if not was_bull: is_fresh_setup = True
@@ -100,66 +97,59 @@ for symbol in ["BTCUSD", "ETHUSD"]:
         signal = "SELL"
         if not was_bear: is_fresh_setup = True
 
-    market_watch.append({
-        "SYMBOL": symbol, "PRICE": curr_p, "VWAP": vwap_val,
-        "EMA20": round(curr["EMA20"], 2), "SIGNAL": signal,
-        "STATUS": "⚡ TRIGGERED" if is_fresh_setup else "WAITING"
-    })
+    market_watch.append({"SYMBOL": symbol, "PRICE": curr_p, "VWAP": vwap_val, "SIGNAL": signal})
 
-    # --- EXECUTION ---
     active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
 
+    # --- EXECUTION (0.5% SL & 0.5% T1) ---
     if is_fresh_setup and active_t is None:
+        qty = round((TOTAL_CAPITAL * ALLOCATION[symbol] * LEVERAGE) / curr_p, 4)
         new_trade = {
-            "pair": symbol, "side": signal, "entry": curr_p, 
-            "qty": round((TOTAL_CAPITAL * ALLOCATION[symbol] * LEVERAGE) / curr_p, 4),
-            "sl": round(curr_p * 0.995 if signal == "BUY" else curr_p * 1.005, 2), # 1.5% SL
-            "target1": round(curr_p * 1.005 if signal == "BUY" else curr_p * 0.995, 2), # 1% Target
+            "pair": symbol, "side": signal, "entry": curr_p, "qty": qty,
+            "sl": round(curr_p * (1 - SL_PCT) if signal == "BUY" else curr_p * (1 + SL_PCT), 2),
+            "target1": round(curr_p * (1 + T1_PCT) if signal == "BUY" else curr_p * (1 - T1_PCT), 2),
             "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "exit": None, "partial_done": False, "pnl": 0.0
         }
         st.session_state.trades.append(new_trade)
         save_data(st.session_state.trades)
-        send_telegram(f"🚀 {signal} {symbol} @ {curr_p}")
+        send_telegram(f"🚀 {signal} {symbol} Entry: {curr_p}")
 
-    # --- TRADE MANAGEMENT & LIVE P&L ---
+    # --- MANAGEMENT (Trailing @ 0.025%) ---
     for t in st.session_state.trades:
         if t["status"] == "OPEN" and t["pair"] == symbol:
-            # Live P&L Calculation
             pnl_move = (curr_p - t["entry"]) if t["side"] == "BUY" else (t["entry"] - curr_p)
             t["pnl"] = round(pnl_move * t["qty"], 2)
 
-            # Partial Booking
+            # Target 1 Hit: Sell 50% & Trail SL to Entry + 0.025%
             if not t["partial_done"]:
                 hit_t1 = (curr_p >= t["target1"]) if t["side"] == "BUY" else (curr_p <= t["target1"])
                 if hit_t1:
-                    t["partial_done"], t["qty"], t["sl"] = True, t["qty"]/2, t["entry"]
+                    t["partial_done"] = True
+                    t["qty"] = t["qty"] / 2
+                    # Secure 0.025% profit
+                    secure_price = t["entry"] * (1 + SECURE_PCT) if t["side"] == "BUY" else t["entry"] * (1 - SECURE_PCT)
+                    t["sl"] = round(secure_price, 2)
                     save_data(st.session_state.trades)
-                    send_telegram(f"💰 PARTIAL {symbol} | SL to Cost")
+                    send_telegram(f"💰 T1 HIT {symbol} | SL Trailed to +0.025%")
 
-            # Exit
+            # Exit logic
             hit_sl = (curr_p <= t["sl"]) if t["side"] == "BUY" else (curr_p >= t["sl"])
             if hit_sl:
                 t["status"], t["exit"] = "CLOSED", curr_p
                 save_data(st.session_state.trades)
-                send_telegram(f"❌ EXIT {symbol} @ {curr_p}")
+                send_telegram(f"❌ EXIT {symbol} @ {curr_p} | P&L: ${t['pnl']}")
 
 # ================= 5. UI DASHBOARD =================
 st.subheader("📊 Live Market Watch")
 st.table(pd.DataFrame(market_watch))
-
 st.divider()
-
-st.subheader("📋 Master Order Book (With Live P&L)")
+st.subheader("📋 Master Order Book (Live P&L)")
 if st.session_state.trades:
     df_h = pd.DataFrame(st.session_state.trades).iloc[::-1]
-    
-    # Display Metrics
-    total_pnl = round(sum(t['pnl'] for t in st.session_state.trades), 2)
-    st.metric("Total P&L (USD)", f"${total_pnl}", delta=total_pnl)
-    
+    total_pnl = round(df_h[df_h['status'] != 'OPEN']['pnl'].sum() + df_h[df_h['status'] == 'OPEN']['pnl'].sum(), 2)
+    st.metric("Net P&L (USD)", f"${total_pnl}", delta=total_pnl)
     st.dataframe(df_h, use_container_width=True)
-    st.download_button("📥 Download Trade Log", df_h.to_csv(index=False), "trading_history.csv", "text/csv")
 else:
     st.info("Searching for fresh setups...")
 
