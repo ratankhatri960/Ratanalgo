@@ -22,7 +22,7 @@ CSV_FILE = "trading_history_v3.csv"
 # Telegram Secrets
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
 CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # ================= 2. CORE FUNCTIONS =================
 def load_history():
