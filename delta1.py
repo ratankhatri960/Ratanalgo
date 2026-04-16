@@ -15,7 +15,7 @@ st_autorefresh(interval=5000, key="refresh")
 TOTAL_CAPITAL = 1000
 LEVERAGE = 25
 CSV_FILE = "midnight_closing_history.csv"
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # --- TARGET & SL SETTINGS ---
 SL_PCT = 0.005        
