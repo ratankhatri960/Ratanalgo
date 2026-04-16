@@ -119,7 +119,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
         new_trade = {
             "pair": symbol, "side": signal, "entry": curr_p, 
             "qty": round((TOTAL_CAPITAL * ALLOCATION[symbol] * LEVERAGE) / curr_p, 4),
-            "sl": round(curr_p * 0.985 if signal == "BUY" else curr_p * 1.015, 2),
+            "sl": round(curr_p * 0.985 if signal == "BUY" else curr_p * 0.99, 2),
             "target1": round(curr_p * 1.01 if signal == "BUY" else curr_p * 0.99, 2),
             "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "exit": None, "partial_done": False
