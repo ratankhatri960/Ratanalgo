@@ -108,7 +108,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
         
         trade = {
             "pair": symbol, "side": signal, "entry": current_price, "qty": qty,
-            "sl": round(current_price * 0.985 if signal == "LONG" else current_price * 1.015, 2),
+            "sl": round(current_price * 0.995 if signal == "LONG" else current_price * 1.005, 2),
             "t1": round(current_price + target_move if signal == "LONG" else current_price - target_move, 2),
             "partial": False, "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M")
         }
