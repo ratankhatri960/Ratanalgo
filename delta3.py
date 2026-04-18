@@ -138,50 +138,60 @@ for symbol in ["BTCUSD", "ETHUSD"]:
         send_telegram(f"🚀 {signal} {symbol} Entry: {curr_p}")
 
     # ================= MANAGEMENT =================
-    for t in st.session_state.trades:
-        if t["status"] == "OPEN" and t["pair"] == symbol:
+for t in st.session_state.trades:
+    if t["status"] == "OPEN" and t["pair"] == symbol:
 
-            pnl_move = (curr_p - t["entry"]) if t["side"] == "LONG" else (t["entry"] - curr_p)
-            t["pnl"] = round(pnl_move * t["qty"], 2)
+        pnl_move = (curr_p - t["entry"]) if t["side"] == "LONG" else (t["entry"] - curr_p)
+        t["pnl"] = round(pnl_move * t["qty"], 2)
 
-            # T1
-            if not t["partial"]:
-                if t["side"] == "LONG":
-                   hit_t1 = df.iloc[-1]["high"] >= t["t1"]
-            else:
-                   hit_t1 = df.iloc[-1]["low"] <= t["t1"]
-   
-            if hit_t1:
-                  t["partial"] = True
+        # ================= T1 FIX =================
+        if not t["partial"]:
+            hit_t1 = False  # ✅ FIX (default define)
 
-                  close_qty = t["qty"] / 2
-                  t["qty"] = round(t["qty"] - close_qty, 4)
-                  shift = t["entry"] * TSL_SECURE_PCT
-                  t["sl"] = round(t["entry"] + shift if t["side"] == "LONG" else t["entry"] - shift, 2)
-                  save_history(st.session_state.trades)
-                  send_telegram(f"💰 T1 HIT {symbol} | 50% Closed | SL Trailed")
-
-            # ✅ REAL TRAILING
-            if t["partial"]:
-                if t["side"] == "LONG":
-                    new_sl = df.iloc[-2]["low"]
-                    if new_sl > t["sl"]:
-                        t["sl"] = round(new_sl, 2)
-                else:
-                    new_sl = df.iloc[-2]["high"]
-                    if new_sl < t["sl"]:
-                        t["sl"] = round(new_sl, 2)
-
-            # ✅ CANDLE SL HIT
             if t["side"] == "LONG":
-                exit_hit = df.iloc[-1]["low"] <= t["sl"]
+                hit_t1 = df.iloc[-1]["high"] >= t["t1"]
             else:
-                exit_hit = df.iloc[-1]["high"] >= t["sl"]
+                hit_t1 = df.iloc[-1]["low"] <= t["t1"]
 
-            if exit_hit:
-                t["status"], t["exit_price"] = "CLOSED", curr_p
+            if hit_t1:
+                t["partial"] = True
+
+                close_qty = t["qty"] / 2
+                t["qty"] = round(t["qty"] - close_qty, 4)
+
+                shift = t["entry"] * TSL_SECURE_PCT
+                t["sl"] = round(
+                    t["entry"] + shift if t["side"] == "LONG"
+                    else t["entry"] - shift, 2
+                )
+
                 save_history(st.session_state.trades)
-                send_telegram(f"❌ EXIT {symbol} @ {curr_p} | P&L: ${t['pnl']}")
+                send_telegram(f"💰 T1 HIT {symbol} | 50% Closed | SL Trailed")
+
+        # ================= REAL TRAILING =================
+        if t["partial"]:
+            if t["side"] == "LONG":
+                new_sl = df.iloc[-2]["low"]
+                if new_sl > t["sl"]:
+                    t["sl"] = round(new_sl, 2)
+            else:
+                new_sl = df.iloc[-2]["high"]
+                if new_sl < t["sl"]:
+                    t["sl"] = round(new_sl, 2)
+
+        # ================= SL EXIT FIX =================
+        if t["side"] == "LONG":
+            exit_hit = df.iloc[-1]["low"] <= t["sl"]
+        else:
+            exit_hit = df.iloc[-1]["high"] >= t["sl"]
+
+        if exit_hit:
+            t["status"] = "CLOSED"
+            t["exit_price"] = t["sl"]   # ✅ FIX (no slippage issue)
+            t["exit_time"] = datetime.now().strftime("%H:%M:%S")
+
+            save_history(st.session_state.trades)
+            send_telegram(f"❌ EXIT {symbol} @ {t['exit_price']} | P&L: ${t['pnl']}")
 
 # ================= 5. UI =================
 st.subheader("📊 Live Market Watch")
@@ -191,19 +201,20 @@ st.divider()
 st.subheader("📋 Active & Closed Trades")
 if st.session_state.trades:
     # Header columns setup
-    header = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
+    header = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1, 1.2, 1])
     header[0].write("**Symbol**")
     header[1].write("**Side**")
     header[2].write("**Entry**")
-    header[3].write("**SL (Live)**")
-    header[4].write("**Target**")
-    header[5].write("**PnL**")
-    header[6].write("**Entry T**")
-    header[7].write("**Exit T**")
-    header[8].write("**Action**")
+    header[3].write("**Qty**")  # ✅ NEW
+    header[4].write("**SL (Live)**")
+    header[5].write("**Target**")
+    header[6].write("**PnL**")
+    header[7].write("**Entry T**")
+    header[8].write("**Exit T**")
+    header[9].write("**Action**")
 
     for i, t in enumerate(st.session_state.trades):
-        row = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
+        row = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1, 1.2, 1])
         
         # Symbol & Side
         row[0].write(f"**{t.get('pair')}**")
@@ -211,47 +222,46 @@ if st.session_state.trades:
         
         # Entry Price
         row[2].write(f"{t.get('entry')}")
+
+        # ✅ Quantity (NEW)
+        row[3].write(f"{t.get('qty')}")
+
+        # SL (Live Trailing)
+        row[4].write(f"🛡️ {t.get('sl', 0)}")
         
-        # --- TRAIL SL LOGIC DISPLAY ---
-        # Agar SL trail hua hai toh ye current live SL dikhayega
-        sl_val = t.get('sl', 0)
-        row[3].write(f"🛡️ {sl_val}")
-        
-        # Target 1
-        row[4].write(f"🎯 {t.get('target1')}")
-        
+        # Target
+        row[5].write(f"🎯 {t.get('t1')}")
+
         # PnL with Color
         pnl = t.get('pnl', 0)
         color = "green" if pnl > 0 else "red"
-        row[5].write(f":{color}[{pnl}]")
+        row[6].write(f":{color}[{pnl}]")
         
         # Times
-        row[6].write(f"{t.get('entry_time', '-')}")
-        row[7].write(f"{t.get('exit_time', '-')}")
+        row[7].write(f"{t.get('time', '-')}")
+        row[8].write(f"{t.get('exit_time', '-')}")
 
         # Action Button or Status
         if t["status"] == "OPEN":
-            if row[8].button(f"Exit", key=f"exit_btn_{i}"):
+            if row[9].button(f"Exit", key=f"exit_btn_{i}"):
                 t["status"] = "CLOSED"
                 t["exit_time"] = datetime.now().strftime("%H:%M:%S")
                 t["exit_timestamp"] = time.time()
-                save_data(st.session_state.trades)
+                save_history(st.session_state.trades)
                 st.rerun()
         else:
-            row[8].write("✅ Closed")
+            row[9].write("✅ Closed")
 
-    # ================= 6. DOWNLOAD SECTION =================
-    if st.session_state.trades:
-       st.divider()
-       # Dataframe ko CSV format mein convert karein
-       df_download = pd.DataFrame(st.session_state.trades)
-       csv_data = df_download.to_csv(index=False).encode('utf-8')
+    # ================= DOWNLOAD =================
+    st.divider()
+    df_download = pd.DataFrame(st.session_state.trades)
+    csv_data = df_download.to_csv(index=False).encode('utf-8')
 
-       # Download Button
-       st.download_button(
-           label="📥 Download Trade History (CSV)",
-           data=csv_data,
-           file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-           mime="text/csv",
-           help="Click here to download all trades in an Excel-friendly CSV format"
-       )
+    st.download_button(
+        label="📥 Download Trade History (CSV)",
+        data=csv_data,
+        file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("Searching for setups...")
