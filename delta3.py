@@ -156,10 +156,10 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 
                   close_qty = t["qty"] / 2
                   t["qty"] = round(t["qty"] - close_qty, 4)
-                    shift = t["entry"] * TSL_SECURE_PCT
-                    t["sl"] = round(t["entry"] + shift if t["side"] == "LONG" else t["entry"] - shift, 2)
-                    save_history(st.session_state.trades)
-                    send_telegram(f"💰 T1 HIT {symbol} | 50% Closed | SL Trailed")
+                  shift = t["entry"] * TSL_SECURE_PCT
+                  t["sl"] = round(t["entry"] + shift if t["side"] == "LONG" else t["entry"] - shift, 2)
+                  save_history(st.session_state.trades)
+                  send_telegram(f"💰 T1 HIT {symbol} | 50% Closed | SL Trailed")
 
             # ✅ REAL TRAILING
             if t["partial"]:
