@@ -163,8 +163,57 @@ for symbol in INDEX_LIST:
         "Status": status
     })
 
-# ================= DASHBOARD =================
-st.subheader("📊 Smart Money Institutional Scanner")
-st.dataframe(pd.DataFrame(results), use_container_width=True)
+# ================= 4. DASHBOARD UI =================
 
-st.info("Core logic: EMA + VWAP + FVG + Delta + OI Divergence Filter")
+# --- SCANNER SECTION ---
+st.subheader("📊 Institutional Option Scanner (ATM)")
+scan_df = pd.DataFrame(scanner_results)
+def style_status(v):
+    return 'color: green; font-weight: bold' if 'VALID' in v else 'color: red'
+st.table(scan_df.style.applymap(style_status, subset=['Status']))
+
+st.divider()
+
+# --- ORDER BOOK SECTION ---
+st.subheader("📋 Active & Closed Option Trades")
+if st.session_state.trades:
+    # Custom Header
+    cols = st.columns([1, 0.8, 1, 1, 1, 1, 1.5, 1.5, 1])
+    h_labels = ["**Index**", "**Type**", "**Strike**", "**Entry LTP**", "**Live LTP**", "**PnL (Pts)**", "**Entry Date/T**", "**Exit Date/T**", "**Action**"]
+    for col, lab in zip(cols, h_labels): col.write(lab)
+
+    for i, t in enumerate(st.session_state.trades):
+        row = st.columns([1, 0.8, 1, 1, 1, 1, 1.5, 1.5, 1])
+        row.write(t["Index"])
+        row.write(t["Type"])
+        row.write(str(t["Strike"]))
+        row.write(str(t["Entry_LTP"]))
+        row.write(str(t["Current_LTP"]))
+        
+        pnl = t["PnL"]
+        row.write(f":{'green' if pnl >= 0 else 'red'}[{pnl}]")
+        
+        row.write(t["Entry_Time"])
+        row.write(t["Exit_Time"])
+
+        if t["Status"] == "OPEN":
+            if row.button("Manual Exit", key=f"ex_{i}"):
+                t["Status"] = "CLOSED"
+                t["Exit_Time"] = datetime.now().strftime("%d/%m %H:%M:%S")
+                save_trades(st.session_state.trades)
+                st.rerun()
+        else:
+            row.write("✅ Closed")
+else:
+    st.info("Searching for Institutional signals...")
+
+# --- SIDEBAR TOOLS ---
+st.sidebar.header("Settings")
+if st.sidebar.button("🗑️ Clear Trade History"):
+    if os.path.exists(CSV_FILE):
+        os.remove(CSV_FILE)
+    st.session_state.trades = []
+    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.write(f"Last API Refresh: {datetime.now().strftime('%H:%M:%S')}")
