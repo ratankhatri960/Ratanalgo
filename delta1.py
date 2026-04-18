@@ -66,22 +66,28 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
 
     # --- Midnight Range Logic ---
+        # ================= MIDNIGHT ORB FIX (STABLE VERSION) =================
     last_time = df['time_ist'].iloc[-1]
-    if last_time.time() <= dt_time(0,30):
-        prev_date = last_time.date() - timedelta(days=1)
+    current_date = last_time.date()
+    yesterday = current_date - timedelta(days=1)
+
+    # Filter data for the 23:30 - 00:30 window
+    # Hum pichle 24 ghante mein jo bhi latest 23:30-00:30 window mili hai usko dhundhenge
+    range_df = df[
+        ((df['time_ist'].dt.date == yesterday) & (df['time_ist'].dt.time >= dt_time(23,30))) |
+        ((df['time_ist'].dt.date == current_date) & (df['time_ist'].dt.time <= dt_time(0,30)))
+    ]
+
+    # Agar current date me abhi tak 23:30 nahi baje hain, toh pichle din ka range use karein
+    if range_df.empty:
+        day_before_yesterday = yesterday - timedelta(days=1)
         range_df = df[
-            ((df['time_ist'].dt.date == prev_date) & (df['time_ist'].dt.time >= dt_time(23,30))) |
-            ((df['time_ist'].dt.date == last_time.date()) & (df['time_ist'].dt.time <= dt_time(0,30)))
-        ]
-    else:
-        range_df = df[
-            (df['time_ist'].dt.date == last_time.date()) &
-            (df['time_ist'].dt.time >= dt_time(23,30)) &
-            (df['time_ist'].dt.time <= dt_time(23,59))
+            ((df['time_ist'].dt.date == day_before_yesterday) & (df['time_ist'].dt.time >= dt_time(23,30))) |
+            ((df['time_ist'].dt.date == yesterday) & (df['time_ist'].dt.time <= dt_time(0,30)))
         ]
 
-    orb_high = range_df["high"].max() if not range_df.empty else 0
-    orb_low = range_df["low"].min() if not range_df.empty else 0
+    orb_high = round(range_df["high"].max(), 2) if not range_df.empty else 0
+    orb_low = round(range_df["low"].min(), 2) if not range_df.empty else 0
 
     curr = df.iloc[-1]   
     last = df.iloc[-2]   
