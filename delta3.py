@@ -146,10 +146,16 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 
             # T1
             if not t["partial"]:
-                hit_t1 = (curr_p >= t["t1"]) if t["side"] == "LONG" else (curr_p <= t["t1"])
-                if hit_t1:
-                    t["partial"] = True
-                    t["qty"] = t["qty"] / 2
+                if t["side"] == "LONG":
+                   hit_t1 = df.iloc[-1]["high"] >= t["t1"]
+            else:
+                   hit_t1 = df.iloc[-1]["low"] <= t["t1"]
+   
+            if hit_t1:
+                  t["partial"] = True
+
+                  close_qty = t["qty"] / 2
+                  t["qty"] = round(t["qty"] - close_qty, 4)
                     shift = t["entry"] * TSL_SECURE_PCT
                     t["sl"] = round(t["entry"] + shift if t["side"] == "LONG" else t["entry"] - shift, 2)
                     save_history(st.session_state.trades)
