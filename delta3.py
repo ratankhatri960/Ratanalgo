@@ -172,6 +172,10 @@ for symbol in ["BTCUSD", "ETHUSD"]:
                     send_telegram(f"❌ EXIT {symbol} @ {t['sl']}")
 
 # ================= 5. UI =================
+st.subheader("📊 Live Market Watch")
+st.table(pd.DataFrame(market_watch))
+st.divider()
+
 st.subheader("📋 Active & Closed Trades")
 if st.session_state.trades:
     # Header columns setup (Date ke liye space badha di gayi hai)
