@@ -1,203 +1,254 @@
+import streamlit as st
+import pandas as pd
 import requests
 import time
 import json
-import math
-import random
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# ================= CONFIG =================
+st.set_page_config(layout="wide", page_title="MCX PRO AI DASHBOARD")
+st.title("🚀 MCX Pro AI Engine (Dhan + ORB + Smart Trading)")
+
+STATE_FILE = "pro_state.json"
+
+DHAN_API_KEY = st.secrets.get("DHAN_API_KEY", "")
+DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "")
+
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
+CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+CAPITAL = 10000
+RISK = 0.02
 
 # ================= STATE =================
-STATE_FILE = "mcx_state.json"
-
 def load_state():
     try:
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     except:
-        return {"positions": []}
+        return {"trades": [], "orb": {}}
 
-def save_state(state):
+def save_state(s):
     with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+        json.dump(s, f)
 
 state = load_state()
 
-# ================= MCX LIVE SIM (replace with Dhan feed) =================
-def get_mcx_price(symbol):
+# ================= TELEGRAM =================
+def tg(msg):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except:
+        pass
 
-    base = {
-        "CRUDEOIL": 6500,
-        "NATURALGAS": 280
-    }[symbol]
+# ================= DHAN LIVE PRICE =================
+def dhan_price(symbol):
+    """
+    🔥 REAL PLACEHOLDER (Replace with Dhan API endpoint)
+    """
+    try:
+        url = f"https://api.dhan.co/v2/marketfeed/ltp"
+        headers = {
+            "client-id": DHAN_CLIENT_ID,
+            "access-token": DHAN_API_KEY
+        }
+        payload = {"symbols": [symbol]}
+        r = requests.post(url, json=payload, headers=headers).json()
 
-    return base + random.randint(-60, 60)
+        return float(r["data"]["ltp"])
+    except:
+        return 6500 if "CRUDE" in symbol else 280
 
-# ================= MCX OPTION CHAIN MAPPING =================
-def get_mcx_option_chain(spot, step=50):
+# ================= OPTION CHAIN (DHAN) =================
+def option_chain(symbol):
+    """
+    🔥 Replace with real Dhan option chain API
+    """
+    spot = dhan_price(symbol)
 
-    strikes = []
-
+    chain = []
     for i in range(-10, 11):
-
-        strike = spot + (i * step)
-
-        strikes.append({
+        strike = spot + (i * 50)
+        chain.append({
             "strike": strike,
-            "ce_oi": random.randint(5000, 60000),
-            "pe_oi": random.randint(5000, 60000),
-            "ce_vol": random.randint(100, 5000),
-            "pe_vol": random.randint(100, 5000),
+            "ce_oi": int(abs(5000 + i * 1000)),
+            "pe_oi": int(abs(4800 + i * 900))
         })
 
-    return strikes
+    return spot, chain
 
-# ================= DELTA MODEL =================
-def calc_delta(spot, strike, opt):
+# ================= ORB ENGINE =================
+def update_orb(symbol, price):
+    if symbol not in state["orb"]:
+        state["orb"][symbol] = {
+            "high": price,
+            "low": price,
+            "start_time": str(datetime.now())
+        }
 
-    diff = (spot - strike) / spot
-    delta = max(min(diff * 5, 1), -1)
+    orb = state["orb"][symbol]
 
-    return delta if opt == "CE" else -delta
+    now = datetime.now().time()
 
-# ================= AUTO STRIKE SELECTION (REAL LOGIC) =================
-def select_strike(chain, spot, signal, delta):
+    # ORB TIME 09:00 - 09:15
+    if now >= datetime.strptime("09:00", "%H:%M").time() and now <= datetime.strptime("09:15", "%H:%M").time():
+        orb["high"] = max(orb["high"], price)
+        orb["low"] = min(orb["low"], price)
 
-    atm = min(chain, key=lambda x: abs(x["strike"] - spot))["strike"]
+    state["orb"][symbol] = orb
 
-    step = 50
-
-    if signal == "BUY":
-
-        if delta > 0.60:
-            strike = atm + step   # OTM CE
-        elif delta > 0.40:
-            strike = atm         # ATM CE
-        else:
-            strike = atm - step  # ITM CE
-
-        return strike, "CE"
-
-    else:
-
-        if delta < -0.60:
-            strike = atm - step   # OTM PE
-        elif delta < -0.40:
-            strike = atm         # ATM PE
-        else:
-            strike = atm + step  # ITM PE
-
-        return strike, "PE"
-
-# ================= FAKE BREAKOUT FILTER =================
-def fake_filter(delta, ce_oi, pe_oi, direction):
-
-    if direction == "UP":
-        if delta < 0.35:
-            return False
-        if ce_oi < pe_oi:
-            return False
-
-    if direction == "DOWN":
-        if delta > -0.35:
-            return False
-        if pe_oi < ce_oi:
-            return False
-
-    return True
-
-# ================= SIGNAL ENGINE (ORB + VWAP + EMA + FVG simplified) =================
-def generate_signal(price):
+# ================= SIGNAL ENGINE =================
+def signal_engine(price):
 
     ema20 = price * 1.001
     ema50 = price * 0.999
     vwap = price * 1.0002
 
-    prev_high = price - 20
-    next_low = price + 20
+    if ema20 > ema50 and price > vwap:
+        return "BUY"
+    elif ema20 < ema50 and price < vwap:
+        return "SELL"
+    return "HOLD"
 
-    bull_fvg = prev_high < next_low
-    bear_fvg = prev_high > next_low
+# ================= DELTA =================
+def delta_calc(spot, strike):
+    return max(min((spot - strike) / spot * 5, 1), -1)
 
-    if ema20 > ema50 and price > vwap and bull_fvg:
-        return "BUY", "UP"
+# ================= FAKE FILTER =================
+def fake_filter(delta, ce_oi, pe_oi, side):
+    if side == "BUY":
+        return not (delta < 0.35 or ce_oi < pe_oi)
+    if side == "SELL":
+        return not (delta > -0.35 or pe_oi < ce_oi)
+    return False
 
-    elif ema20 < ema50 and price < vwap and bear_fvg:
-        return "SELL", "DOWN"
+# ================= TRADE QTY =================
+def qty(entry, sl):
+    risk_amt = CAPITAL * RISK
+    return max(int(risk_amt / abs(entry - sl)), 1)
 
-    return "NO TRADE", None
+# ================= EXECUTE TRADE =================
+def execute_trade(symbol, side, entry, sl, tp):
 
-# ================= EXECUTION =================
-def place_trade(symbol, qty, side):
+    trade = {
+        "symbol": symbol,
+        "side": side,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "qty": qty(entry, sl),
+        "status": "OPEN",
+        "time": str(datetime.now()),
+        "pnl": 0
+    }
 
-    print(f"ORDER EXECUTED: {side} {symbol} QTY {qty}")
+    state["trades"].append(trade)
+    save_state(state)
 
-# ================= RISK =================
-def calc_qty(capital, risk_pct, sl_distance):
-    return max(int((capital * risk_pct) / sl_distance), 1)
+    tg(f"🚀 {side} {symbol} ENTRY @ {entry}")
+
+# ================= TRAILING SL =================
+def trailing():
+
+    for t in state["trades"]:
+        if t["status"] != "OPEN":
+            continue
+
+        price = dhan_price(t["symbol"])
+
+        pnl = (price - t["entry"]) if t["side"] == "BUY" else (t["entry"] - price)
+        t["pnl"] = pnl * t["qty"]
+
+        # SL update
+        if t["side"] == "BUY":
+            if price > t["entry"] * 1.01:
+                t["sl"] = max(t["sl"], price - 10)
+
+        else:
+            if price < t["entry"] * 0.99:
+                t["sl"] = min(t["sl"], price + 10)
+
+        # EXIT
+        if t["side"] == "BUY" and price <= t["sl"]:
+            t["status"] = "CLOSED"
+            tg(f"❌ EXIT BUY {t['symbol']} PNL {t['pnl']}")
+
+        if t["side"] == "SELL" and price >= t["sl"]:
+            t["status"] = "CLOSED"
+            tg(f"❌ EXIT SELL {t['symbol']} PNL {t['pnl']}")
 
 # ================= MAIN ENGINE =================
-def run():
+SYMBOLS = ["CRUDEOIL", "NATURALGAS"]
 
-    SYMBOLS = ["CRUDEOIL", "NATURALGAS"]
+market = []
 
-    CAPITAL = 10000
-    RISK = 0.02
+for s in SYMBOLS:
 
-    while True:
+    price, chain = option_chain(s)
 
-        for symbol in SYMBOLS:
+    update_orb(s, price)
 
-            spot = get_mcx_price(symbol)
-            chain = get_mcx_option_chain(spot)
+    orb = state["orb"][s]
 
-            signal, direction = generate_signal(spot)
+    signal = signal_engine(price)
 
-            print(symbol, spot, signal)
+    ce_oi = sum(x["ce_oi"] for x in chain) / len(chain)
+    pe_oi = sum(x["pe_oi"] for x in chain) / len(chain)
 
-            if signal == "NO TRADE":
-                continue
+    strike = chain[10]["strike"]
+    delta = delta_calc(price, strike)
 
-            delta = calc_delta(spot, chain[0]["strike"], "CE")
+    valid = fake_filter(delta, ce_oi, pe_oi, signal)
 
-            strike, opt = select_strike(chain, spot, signal, delta)
+    market.append({
+        "SYMBOL": s,
+        "PRICE": price,
+        "SIGNAL": signal,
+        "ORB HIGH": orb["high"],
+        "ORB LOW": orb["low"],
+        "STATUS": "OK" if valid else "FILTERED"
+    })
 
-            ce_oi = sum(x["ce_oi"] for x in chain) / len(chain)
-            pe_oi = sum(x["pe_oi"] for x in chain) / len(chain)
+    # ENTRY AFTER ORB
+    now = datetime.now().time()
+    if now > datetime.strptime("09:15", "%H:%M").time():
 
-            valid = fake_filter(delta, ce_oi, pe_oi, direction)
+        if signal != "HOLD" and valid:
 
-            if not valid:
-                print("❌ Fake breakout rejected")
-                continue
+            active = [t for t in state["trades"] if t["status"] == "OPEN"]
 
-            # ENTRY CONDITIONS
-            open_positions = [p for p in state["positions"] if p["status"] == "OPEN"]
+            if len(active) == 0:
 
-            if len(open_positions) == 0:
+                sl = price * 0.995 if signal == "BUY" else price * 1.005
+                tp = price * 1.01 if signal == "BUY" else price * 0.99
 
-                entry = spot
-                sl = spot * 0.995 if signal == "BUY" else spot * 1.005
-                tp = spot * 1.01 if signal == "BUY" else spot * 0.99
+                execute_trade(s, signal, price, sl, tp)
 
-                qty = calc_qty(CAPITAL, RISK, abs(entry - sl))
+save_state(state)
+trailing()
 
-                place_trade(symbol, qty, signal)
+# ================= DASHBOARD =================
+st.subheader("📊 LIVE MARKET VIEW")
+st.dataframe(pd.DataFrame(market), use_container_width=True)
 
-                state["positions"].append({
-                    "symbol": symbol,
-                    "side": signal,
-                    "strike": strike,
-                    "type": opt,
-                    "entry": entry,
-                    "sl": sl,
-                    "tp": tp,
-                    "qty": qty,
-                    "status": "OPEN",
-                    "time": str(datetime.now())
-                })
+st.divider()
 
-                save_state(state)
+st.subheader("📈 LIVE + CLOSED TRADES")
 
-        time.sleep(5)
+df = pd.DataFrame(state["trades"])
+st.dataframe(df, use_container_width=True)
 
-# ================= START =================
-run()
+st.divider()
+
+st.subheader("💰 PNL SUMMARY")
+
+if len(df) > 0:
+    st.metric("Total Trades", len(df))
+    st.metric("Open Trades", len(df[df["status"] == "OPEN"]))
+    st.metric("Closed Trades", len(df[df["status"] == "CLOSED"]))
+    st.metric("Net PnL", round(df["pnl"].sum(), 2))
+
+# ================= AUTO REFRESH =================
+time.sleep(3)
+st.rerun()
