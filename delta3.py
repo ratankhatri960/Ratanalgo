@@ -22,7 +22,7 @@ st_autorefresh(interval=5000, key="refresh")
 
 TOTAL_CAPITAL = 1000
 LEVERAGE = 25
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 SL_VAL_PCT = 0.005
 T1_VAL_PCT = 0.005
