@@ -15,6 +15,7 @@ session.get("https://www.nseindia.com", headers=headers)
 
 # ================= CONFIG =================
 INDEX_LIST = ["NIFTY", "BANKNIFTY", "SENSEX"]
+scanner_results = [] # Initialize outside to prevent NameError
 
 # ================= SPOT (replace with broker API later) =================
 def get_spot(symbol):
