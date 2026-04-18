@@ -172,42 +172,51 @@ for symbol in ["BTCUSD", "ETHUSD"]:
                     send_telegram(f"❌ EXIT {symbol} @ {t['sl']}")
 
 # ================= 5. UI =================
-st.subheader("📊 Live Market Watch")
-st.table(pd.DataFrame(market_watch))
-
-st.divider()
 st.subheader("📋 Active & Closed Trades")
-
 if st.session_state.trades:
-    # Header
-    h = st.columns([1.2, 0.8, 1, 1, 1, 1, 1.5, 1.5, 1])
-    h[0].write("**Symbol**"); h[1].write("**Side**"); h[2].write("**Entry**")
-    h[3].write("**SL (Trail)**"); h[4].write("**Target**"); h[5].write("**PnL**")
-    h[6].write("**Entry Date/T**"); h[7].write("**Exit Date/T**"); h[8].write("**Action**")
+    # Header columns setup (Date ke liye space badha di gayi hai)
+    header = st.columns([1.2, 0.8, 1, 1, 1, 1, 1.6, 1.6, 1])
+    header[0].write("**Symbol**")
+    header[1].write("**Side**")
+    header[2].write("**Entry**")
+    header[3].write("**SL (Live)**")
+    header[4].write("**Target**")
+    header[5].write("**PnL**")
+    header[6].write("**Entry Date/T**") # Updated
+    header[7].write("**Exit Date/T**")  # Updated
+    header[8].write("**Action**")
 
     for i, t in enumerate(st.session_state.trades):
-        r = st.columns([1.2, 0.8, 1, 1, 1, 1, 1.5, 1.5, 1])
-        r[0].write(f"**{t.get('pair')}**")
-        r[1].write(t.get('side'))
-        r[2].write(f"{t.get('entry')}")
-        r[3].write(f"🛡️ {t.get('sl')}")
-        r[4].write(f"🎯 {t.get('t1')}")
+        row = st.columns([1.2, 0.8, 1, 1, 1, 1, 1.6, 1.6, 1])
+        
+        row[0].write(f"**{t.get('pair')}**")
+        row[1].write(t.get('side'))
+        row[2].write(f"{t.get('entry')}")
+        
+        sl_val = t.get('sl', 0)
+        row[3].write(f"🛡️ {sl_val}")
+        
+        row[4].write(f"🎯 {t.get('t1') if 't1' in t else t.get('target1')}") # Dono key names handle kiye hain
         
         pnl = t.get('pnl', 0)
-        r[5].write(f":{'green' if pnl >= 0 else 'red'}[{pnl}]")
+        color = "green" if pnl >= 0 else "red"
+        row[5].write(f":{color}[{pnl}]")
         
-        r[6].write(t.get('entry_dt', '-'))
-        r[7].write(t.get('exit_dt', '-'))
+        # Date + Time Display (Safe Get)
+        row[6].write(f"{t.get('entry_dt', t.get('entry_time', '-'))}")
+        row[7].write(f"{t.get('exit_dt', t.get('exit_time', '-'))}")
 
-        if t["status"] == "OPEN":
-            if r[8].button("Exit", key=f"ex_{i}"):
-                t["status"], t["exit_dt"], t["exit_ts"] = "CLOSED", datetime.now().strftime("%d/%m %H:%M"), time.time()
+        if t.get("status") == "OPEN":
+            if row[8].button(f"Exit", key=f"exit_btn_{i}"):
+                t["status"] = "CLOSED"
+                # Exit waqt Date aur Time dono save honge
+                t["exit_dt"] = datetime.now().strftime("%d/%m %H:%M:%S")
+                t["exit_time"] = t["exit_dt"] # Purane code compatibility ke liye
+                t["exit_timestamp"] = time.time()
                 save_history(st.session_state.trades)
                 st.rerun()
         else:
-            r[8].write("✅")
-else:
-    st.info("No trades found. Bot is scanning...")
+            row[8].write("✅ Closed")
 
 # Sidebar Tools
 if st.sidebar.button("🗑️ Clear All History"):
