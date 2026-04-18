@@ -109,7 +109,15 @@ elif orb_low > 0 and last_close < orb_low and curr_p < vwap_val and curr["EMA20"
         
         new_trade = {
             "pair": symbol, "side": side, "entry": curr_p, "qty": qty,
-            "sl": round(curr_p * (1 - SL_PCT) if side == "LONG" else curr_p * (1 + SL_PCT), 2),
+            "sl": round(curr_p * (1 - SL_PCT) if if t["side"] == "LONG":
+    new_sl = df.iloc[-2]["low"]
+    if new_sl > t["sl"]:
+        t["sl"] = new_sl
+
+else:
+    new_sl = df.iloc[-2]["high"]
+    if new_sl < t["sl"]:
+        t["sl"] = new_sl,
             "target1": round(curr_p * (1 + T1_PCT) if side == "LONG" else curr_p * (1 - T1_PCT), 2),
             "partial_done": False, "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "pnl": 0.0
