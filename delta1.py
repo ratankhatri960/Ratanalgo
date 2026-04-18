@@ -183,22 +183,72 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 # ================= 5. UI =================
 st.subheader("📊 Live Market Watch")
 st.table(pd.DataFrame(market_watch))
-
-st.subheader("📋 Active Trades")
-for i, t in enumerate(st.session_state.trades):
-    if t["status"] == "OPEN":
-        c = st.columns([1, 1, 1, 1, 1, 1])
-        c[0].write(f"**{t['pair']}** ({t['side']})")
-        c[1].write(f"Entry: {t['entry']}")
-        c[2].write(f"SL: {t['sl']}")
-        c[3].write(f"PnL: {t['pnl']}")
-        c[4].write(f"Time: {t['entry_time']}")
-        if c[5].button(f"Manual Exit", key=f"exit_{i}"):
-            t["status"], t["exit_time"] = "CLOSED", datetime.now().strftime("%H:%M:%S")
-            save_data(st.session_state.trades)
-            st.rerun()
-
 st.divider()
-st.subheader("📜 Trade History")
+
+st.subheader("📋 Active & Closed Trades")
 if st.session_state.trades:
-    st.dataframe(pd.DataFrame(st.session_state.trades).iloc[::-1], use_container_width=True)
+    # Header columns setup
+    header = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
+    header[0].write("**Symbol**")
+    header[1].write("**Side**")
+    header[2].write("**Entry**")
+    header[3].write("**SL (Live)**")
+    header[4].write("**Target**")
+    header[5].write("**PnL**")
+    header[6].write("**Entry T**")
+    header[7].write("**Exit T**")
+    header[8].write("**Action**")
+
+    for i, t in enumerate(st.session_state.trades):
+        row = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
+        
+        # Symbol & Side
+        row[0].write(f"**{t.get('pair')}**")
+        row[1].write(t.get('side'))
+        
+        # Entry Price
+        row[2].write(f"{t.get('entry')}")
+        
+        # --- TRAIL SL LOGIC DISPLAY ---
+        # Agar SL trail hua hai toh ye current live SL dikhayega
+        sl_val = t.get('sl', 0)
+        row[3].write(f"🛡️ {sl_val}")
+        
+        # Target 1
+        row[4].write(f"🎯 {t.get('target1')}")
+        
+        # PnL with Color
+        pnl = t.get('pnl', 0)
+        color = "green" if pnl > 0 else "red"
+        row[5].write(f":{color}[{pnl}]")
+        
+        # Times
+        row[6].write(f"{t.get('entry_time', '-')}")
+        row[7].write(f"{t.get('exit_time', '-')}")
+
+        # Action Button or Status
+        if t["status"] == "OPEN":
+            if row[8].button(f"Exit", key=f"exit_btn_{i}"):
+                t["status"] = "CLOSED"
+                t["exit_time"] = datetime.now().strftime("%H:%M:%S")
+                t["exit_timestamp"] = time.time()
+                save_data(st.session_state.trades)
+                st.rerun()
+        else:
+            row[8].write("✅ Closed")
+
+    # ================= 6. DOWNLOAD SECTION =================
+    if st.session_state.trades:
+       st.divider()
+       # Dataframe ko CSV format mein convert karein
+       df_download = pd.DataFrame(st.session_state.trades)
+       csv_data = df_download.to_csv(index=False).encode('utf-8')
+
+       # Download Button
+       st.download_button(
+           label="📥 Download Trade History (CSV)",
+           data=csv_data,
+           file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+           mime="text/csv",
+           help="Click here to download all trades in an Excel-friendly CSV format"
+       )
