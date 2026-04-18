@@ -80,7 +80,6 @@ range_df = df[
 orb_high = range_df["high"].max() if not range_df.empty else 0
 orb_low = range_df["low"].min() if not range_df.empty else 0
 
-
     curr = df.iloc[-1]   # Running Candle (Live)
     last = df.iloc[-2]   # Completed Candle (To check closing)
     
