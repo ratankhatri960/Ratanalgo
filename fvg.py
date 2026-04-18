@@ -187,9 +187,8 @@ st.divider()
 
 # --- ORDER BOOK SECTION ---
 st.subheader("📋 Active & Closed Option Trades")
-if st.session_state.trades:
-    # --- 1. SAFE SESSION INITIALIZATION ---
-if "trades" not in st.session_state:
+if "trades" in st.session_state and st.session_state.trades:
+
     # Try to load from CSV, otherwise start with empty list
     if os.path.exists(CSV_FILE):
         try:
