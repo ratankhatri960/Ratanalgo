@@ -188,6 +188,17 @@ st.divider()
 # --- ORDER BOOK SECTION ---
 st.subheader("📋 Active & Closed Option Trades")
 if st.session_state.trades:
+    # --- 1. SAFE SESSION INITIALIZATION ---
+if "trades" not in st.session_state:
+    # Try to load from CSV, otherwise start with empty list
+    if os.path.exists(CSV_FILE):
+        try:
+            st.session_state.trades = pd.read_csv(CSV_FILE).to_dict('records')
+        except:
+            st.session_state.trades = []
+    else:
+        st.session_state.trades = []
+
     # Custom Header
     cols = st.columns([1, 0.8, 1, 1, 1, 1, 1.5, 1.5, 1])
     h_labels = ["**Index**", "**Type**", "**Strike**", "**Entry LTP**", "**Live LTP**", "**PnL (Pts)**", "**Entry Date/T**", "**Exit Date/T**", "**Action**"]
