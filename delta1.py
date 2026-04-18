@@ -56,21 +56,30 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     df = get_candles(symbol, "5m")
     if df.empty or len(df) < 2: continue
 
-    # Indicators
-    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
-    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
-    df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+    # --- Indicators ---
+df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
 
-    # Midnight Range (23:30 - 00:30 IST)
-    today = df['time_ist'].dt.date.iloc[-1]
+# --- VWAP Calculation ---
+df['date'] = df['time_ist'].dt.date
+df['cum_vol'] = df.groupby('date')['volume'].cumsum()
+df['cum_vol_price'] = (df['close'] * df['volume']).groupby(df['date']).cumsum()
+df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
 
-     range_df = df[
-    ((df['time_ist'].dt.date == today) & 
-    ((df['time_ist'].dt.time >= dt_time(23,30)) | 
-     (df['time_ist'].dt.time <= dt_time(0,30))))
-    ]
-    orb_high = range_df["high"].max() if not range_df.empty else 0
-    orb_low = range_df["low"].min() if not range_df.empty else 0
+# --- Midnight Range (23:30 - 00:30 IST) ---
+today = df['time_ist'].dt.date.iloc[-1]
+
+# Filter for the specific time window
+range_df = df[
+    (df['time_ist'].dt.date == today) & 
+    ((df['time_ist'].dt.time >= dt_time(23, 30)) | 
+     (df['time_ist'].dt.time <= dt_time(0, 30)))
+]
+
+# Calculate ORB High/Low
+orb_high = range_df["high"].max() if not range_df.empty else 0
+orb_low = range_df["low"].min() if not range_df.empty else 0
+
 
     curr = df.iloc[-1]   # Running Candle (Live)
     last = df.iloc[-2]   # Completed Candle (To check closing)
