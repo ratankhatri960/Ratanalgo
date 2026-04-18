@@ -3,12 +3,12 @@ import pandas as pd
 import requests
 import time
 import os
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from streamlit_autorefresh import st_autorefresh
 
 # ================= 1. CONFIG =================
 st.set_page_config(layout="wide", page_title="Delta Midnight Pro")
-st.title("🤖 Midnight ORB: Candle Closing Logic")
+st.title("🤖 Midnight ORB: Fresh Breakout Logic")
 
 st_autorefresh(interval=5000, key="refresh") 
 
@@ -17,10 +17,11 @@ LEVERAGE = 25
 CSV_FILE = "midnight_closing_history.csv"
 BASE_URL = "https://api.india.delta.exchange"
 
-# --- TARGET & SL SETTINGS ---
 SL_PCT = 0.005        
 T1_PCT = 0.005        
 SECURE_PCT = 0.00025  
+RISK_PER_TRADE = 0.02   
+COOLDOWN_MIN = 15       
 
 # ================= 2. FUNCTIONS =================
 def load_data():
@@ -54,73 +55,94 @@ market_watch = []
 
 for symbol in ["BTCUSD", "ETHUSD"]:
     df = get_candles(symbol, "5m")
-    if df.empty or len(df) < 2: continue
+    if df.empty or len(df) < 50: continue
 
-    # --- Indicators ---
-df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
-df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+    # Indicators
+    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+    df['date'] = df['time_ist'].dt.date
+    df['cum_vol'] = df.groupby('date')['volume'].cumsum()
+    df['cum_vol_price'] = (df['close'] * df['volume']).groupby(df['date']).cumsum()
+    df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
 
-# --- VWAP Calculation ---
-df['date'] = df['time_ist'].dt.date
-df['cum_vol'] = df.groupby('date')['volume'].cumsum()
-df['cum_vol_price'] = (df['close'] * df['volume']).groupby(df['date']).cumsum()
-df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
+    # --- Midnight Range Logic ---
+    last_time = df['time_ist'].iloc[-1]
+    if last_time.time() <= dt_time(0,30):
+        prev_date = last_time.date() - timedelta(days=1)
+        range_df = df[
+            ((df['time_ist'].dt.date == prev_date) & (df['time_ist'].dt.time >= dt_time(23,30))) |
+            ((df['time_ist'].dt.date == last_time.date()) & (df['time_ist'].dt.time <= dt_time(0,30)))
+        ]
+    else:
+        range_df = df[
+            (df['time_ist'].dt.date == last_time.date()) &
+            (df['time_ist'].dt.time >= dt_time(23,30)) &
+            (df['time_ist'].dt.time <= dt_time(23,59))
+        ]
 
-# --- Midnight Range (23:30 - 00:30 IST) ---
-today = df['time_ist'].dt.date.iloc[-1]
+    orb_high = range_df["high"].max() if not range_df.empty else 0
+    orb_low = range_df["low"].min() if not range_df.empty else 0
 
-# Filter for the specific time window
-range_df = df[
-    (df['time_ist'].dt.date == today) & 
-    ((df['time_ist'].dt.time >= dt_time(23, 30)) | 
-     (df['time_ist'].dt.time <= dt_time(0, 30)))
-]
-
-# Calculate ORB High/Low
-orb_high = range_df["high"].max() if not range_df.empty else 0
-orb_low = range_df["low"].min() if not range_df.empty else 0
-
-curr = df.iloc[-1]   # Running Candle (Live)
-last = df.iloc[-2]   # Completed Candle (To check closing)
+    curr = df.iloc[-1]   
+    last = df.iloc[-2]   
+    prev_last = df.iloc[-3] # To check fresh breakout
     
-curr_p = float(curr["close"])
-last_close = float(last["close"])
-vwap_val = round(curr["VWAP"], 2)
+    curr_p = float(curr["close"])
+    last_close = float(last["close"])
+    vwap_val = round(curr["VWAP"], 2)
     
-# SIGNAL CHECK (Based on LAST candle closing)
-signal = "WAITING"
-if orb_high > 0 and last_close > orb_high and curr_p > vwap_val and curr["EMA20"] > curr["EMA50"]:
-    signal = "BULLISH BREAKOUT"
-elif orb_low > 0 and last_close < orb_low and curr_p < vwap_val and curr["EMA20"] < curr["EMA50"]:
-    signal = "BEARISH BREAKOUT"
+    # ================= FRESH BREAKOUT CHECK =================
+    # Signal tabhi aayega jab pichli candle range ke andar thi aur ab bahar close hui hai
+    signal = "WAITING"
+    
+    is_fresh_bullish = (last_close > orb_high) and (last.open <= orb_high)
+    is_fresh_bearish = (last_close < orb_low) and (last.open >= orb_low)
+
+    if orb_high > 0 and is_fresh_bullish and curr_p > vwap_val and curr["EMA20"] > curr["EMA50"]:
+        signal = "BULLISH BREAKOUT"
+    elif orb_low > 0 and is_fresh_bearish and curr_p < vwap_val and curr["EMA20"] < curr["EMA50"]:
+        signal = "BEARISH BREAKOUT"
+
+    # ================= COOLDOWN CHECK =================
+    on_cooldown = False
+    last_trade_closed = next((t for t in reversed(st.session_state.trades) if t["pair"] == symbol and t["status"] == "CLOSED"), None)
+    
+    if last_trade_closed:
+        try:
+            # We use exit_time or current time logic
+            exit_dt = datetime.strptime(last_trade_closed["exit_time"], "%H:%M:%S")
+            now_dt = datetime.now()
+            # Convert to same day for comparison
+            exit_dt = now_dt.replace(hour=exit_dt.hour, minute=exit_dt.minute, second=exit_dt.second)
+            diff = (now_dt - exit_dt).total_seconds() / 60
+            if diff < COOLDOWN_MIN:
+                on_cooldown = True
+        except: pass
 
     market_watch.append({
-        "SYMBOL": symbol, "PRICE": curr_p, 
-        "LAST CLOSE": last_close, "ORB HIGH": orb_high, 
-        "ORB LOW": orb_low, "SIGNAL": signal
+        "SYMBOL": symbol, "PRICE": curr_p, "SIGNAL": signal, 
+        "STATUS": "COOLDOWN" if on_cooldown else "READY",
+        "ORB H/L": f"{orb_high}/{orb_low}"
     })
 
     # EXECUTION
     active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
 
-    if signal != "WAITING" and active_t is None:
+    if signal != "WAITING" and active_t is None and not on_cooldown:
         side = "LONG" if signal == "BULLISH BREAKOUT" else "SHORT"
-        qty = round((TOTAL_CAPITAL * 0.5 * LEVERAGE) / curr_p, 4)
         
+        # Risk Based Qty
+        risk_amount = TOTAL_CAPITAL * RISK_PER_TRADE
+        sl_distance = curr_p * SL_PCT
+        qty = round(risk_amount / sl_distance, 4)
+
         new_trade = {
             "pair": symbol, "side": side, "entry": curr_p, "qty": qty,
-            "sl": round(curr_p * (1 - SL_PCT) if if t["side"] == "LONG":
-    new_sl = df.iloc[-2]["low"]
-    if new_sl > t["sl"]:
-        t["sl"] = new_sl
-
-else:
-    new_sl = df.iloc[-2]["high"]
-    if new_sl < t["sl"]:
-        t["sl"] = new_sl,
+            "sl": round(curr_p * (1 - SL_PCT) if side == "LONG" else curr_p * (1 + SL_PCT), 2),
             "target1": round(curr_p * (1 + T1_PCT) if side == "LONG" else curr_p * (1 - T1_PCT), 2),
-            "partial_done": False, "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "pnl": 0.0
+            "partial_done": False, "status": "OPEN", 
+            "entry_time": datetime.now().strftime("%H:%M:%S"),
+            "exit_time": "-", "pnl": 0.0
         }
         st.session_state.trades.append(new_trade)
         save_data(st.session_state.trades)
@@ -136,19 +158,41 @@ else:
                 if hit_t1:
                     t["partial_done"] = True
                     t["qty"] = t["qty"] / 2 
-                    secure_price = t["entry"] * (1 + SECURE_PCT) if t["side"] == "LONG" else t["entry"] * (1 - SECURE_PCT)
-                    t["sl"] = round(secure_price, 2)
+                    t["sl"] = round(t["entry"] * (1 + SECURE_PCT) if t["side"] == "LONG" else t["entry"] * (1 - SECURE_PCT), 2)
                     save_data(st.session_state.trades)
 
+            # Trailing SL after Partial
+            if t["partial_done"]:
+                new_sl = df.iloc[-2]["low"] if t["side"] == "LONG" else df.iloc[-2]["high"]
+                if t["side"] == "LONG" and new_sl > t["sl"]: t["sl"] = round(new_sl, 2)
+                elif t["side"] == "SHORT" and new_sl < t["sl"]: t["sl"] = round(new_sl, 2)
+
+            # EXIT CHECK
             hit_exit = (curr_p <= t["sl"]) if t["side"] == "LONG" else (curr_p >= t["sl"])
             if hit_exit:
-                t["status"], t["exit"] = "CLOSED", curr_p
+                t["status"], t["exit_price"] = "CLOSED", curr_p
+                t["exit_time"] = datetime.now().strftime("%H:%M:%S")
                 save_data(st.session_state.trades)
 
 # ================= 5. UI =================
-st.subheader("📊 Midnight ORB Live Watch (Closing Basis)")
+st.subheader("📊 Live Market Watch")
 st.table(pd.DataFrame(market_watch))
+
+st.subheader("📋 Active Trades")
+for i, t in enumerate(st.session_state.trades):
+    if t["status"] == "OPEN":
+        c = st.columns([1, 1, 1, 1, 1, 1])
+        c[0].write(f"**{t['pair']}** ({t['side']})")
+        c[1].write(f"Entry: {t['entry']}")
+        c[2].write(f"SL: {t['sl']}")
+        c[3].write(f"PnL: {t['pnl']}")
+        c[4].write(f"Time: {t['entry_time']}")
+        if c[5].button(f"Manual Exit", key=f"exit_{i}"):
+            t["status"], t["exit_time"] = "CLOSED", datetime.now().strftime("%H:%M:%S")
+            save_data(st.session_state.trades)
+            st.rerun()
+
 st.divider()
-st.subheader("📋 Order Book")
+st.subheader("📜 Trade History")
 if st.session_state.trades:
     st.dataframe(pd.DataFrame(st.session_state.trades).iloc[::-1], use_container_width=True)
