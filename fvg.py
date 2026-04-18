@@ -167,10 +167,20 @@ for symbol in INDEX_LIST:
 
 # --- SCANNER SECTION ---
 st.subheader("📊 Institutional Option Scanner (ATM)")
-scan_df = pd.DataFrame(scanner_results)
-def style_status(v):
-    return 'color: green; font-weight: bold' if 'VALID' in v else 'color: red'
-st.table(scan_df.style.applymap(style_status, subset=['Status']))
+
+# Safety Check: Agar scanner_results empty hai toh empty dataframe dikhao
+if scanner_results:
+    scan_df = pd.DataFrame(scanner_results)
+    
+    def style_status(v):
+        if not isinstance(v, str): return ''
+        return 'color: green; font-weight: bold' if 'VALID' in v else 'color: red'
+    
+    st.table(scan_df.style.applymap(style_status, subset=['Status']))
+else:
+    st.warning("⚠️ NSE Data not available. Retrying in next cycle...")
+    # Ek empty table headers ke saath dikhane ke liye
+    st.table(pd.DataFrame(columns=["Index", "Spot", "Signal", "Status", "Time"]))
 
 st.divider()
 
