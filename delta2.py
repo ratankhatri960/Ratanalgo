@@ -240,17 +240,17 @@ if st.session_state.trades:
 
     # ================= 6. DOWNLOAD SECTION =================
     if st.session_state.trades:
-    st.divider()
-    # Dataframe ko CSV format mein convert karein
-    df_download = pd.DataFrame(st.session_state.trades)
-    csv_data = df_download.to_csv(index=False).encode('utf-8')
+       st.divider()
+       # Dataframe ko CSV format mein convert karein
+       df_download = pd.DataFrame(st.session_state.trades)
+       csv_data = df_download.to_csv(index=False).encode('utf-8')
 
-    # Download Button
-    st.download_button(
-        label="📥 Download Trade History (CSV)",
-        data=csv_data,
-        file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-        help="Click here to download all trades in an Excel-friendly CSV format"
-    )
+       # Download Button
+       st.download_button(
+           label="📥 Download Trade History (CSV)",
+           data=csv_data,
+           file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+           mime="text/csv",
+           help="Click here to download all trades in an Excel-friendly CSV format"
+       )
 
