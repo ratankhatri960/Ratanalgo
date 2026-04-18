@@ -25,6 +25,7 @@ INDEX_MAP = {
     "BANKNIFTY": "BANKNIFTY",
     "SENSEX": "SENSEX"
 }
+scanner_results = [] # Initialize outside to prevent NameError
 
 # ================= NSE DATA =================
 def get_option_chain(symbol):
