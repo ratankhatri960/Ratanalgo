@@ -80,19 +80,19 @@ range_df = df[
 orb_high = range_df["high"].max() if not range_df.empty else 0
 orb_low = range_df["low"].min() if not range_df.empty else 0
 
-    curr = df.iloc[-1]   # Running Candle (Live)
-    last = df.iloc[-2]   # Completed Candle (To check closing)
+curr = df.iloc[-1]   # Running Candle (Live)
+last = df.iloc[-2]   # Completed Candle (To check closing)
     
-    curr_p = float(curr["close"])
-    last_close = float(last["close"])
-    vwap_val = round(curr["VWAP"], 2)
+curr_p = float(curr["close"])
+last_close = float(last["close"])
+vwap_val = round(curr["VWAP"], 2)
     
-    # SIGNAL CHECK (Based on LAST candle closing)
-    signal = "WAITING"
-    if orb_high > 0 and last_close > orb_high and curr_p > vwap_val and curr["EMA20"] > curr["EMA50"]:
-        signal = "BULLISH BREAKOUT"
-    elif orb_low > 0 and last_close < orb_low and curr_p < vwap_val and curr["EMA20"] < curr["EMA50"]:
-        signal = "BEARISH BREAKOUT"
+# SIGNAL CHECK (Based on LAST candle closing)
+signal = "WAITING"
+if orb_high > 0 and last_close > orb_high and curr_p > vwap_val and curr["EMA20"] > curr["EMA50"]:
+    signal = "BULLISH BREAKOUT"
+elif orb_low > 0 and last_close < orb_low and curr_p < vwap_val and curr["EMA20"] < curr["EMA50"]:
+    signal = "BEARISH BREAKOUT"
 
     market_watch.append({
         "SYMBOL": symbol, "PRICE": curr_p, 
