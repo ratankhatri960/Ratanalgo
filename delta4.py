@@ -10,12 +10,16 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(layout="wide", page_title="Delta 1H Swing Pro")
 st.title("🤖 Delta AI: 1 Hour Swing (OB + FVG)")
 
-st_autorefresh(interval=15000, key="refresh") # 15s refresh for 1H TF
+st_autorefresh(interval=15000, key="refresh")
 
 TOTAL_CAPITAL = 1000
-LEVERAGE = 10  # Swing ke liye 10x is safer
+LEVERAGE = 10
 CSV_FILE = "swing_history.csv"
 BASE_URL = "https://api.india.delta.exchange"
+
+# ✅ NEW ADDITIONS
+RISK_PER_TRADE = 0.02
+COOLDOWN_HOURS = 2
 
 # ================= 2. FUNCTIONS =================
 def load_data():
@@ -27,10 +31,9 @@ def load_data():
 def save_data(trades):
     if trades: pd.DataFrame(trades).to_csv(CSV_FILE, index=False)
 
-def get_candles(symbol, tf="1h"): # Default set to 1H
+def get_candles(symbol, tf="1h"):
     try:
         now = int(time.time())
-        # Fetching more data to calculate 200 EMA
         r = requests.get(f"{BASE_URL}/v2/history/candles",
             params={"symbol": symbol, "resolution": tf, "start": now-(86400*15), "end": now}, timeout=10).json()
         df = pd.DataFrame(r["result"]).sort_values("time")
@@ -43,77 +46,122 @@ def get_candles(symbol, tf="1h"): # Default set to 1H
 if "trades" not in st.session_state:
     st.session_state.trades = load_data()
 
-# ================= 4. SWING ENGINE (1H) =================
+# ================= 4. SWING ENGINE =================
 market_watch = []
 
 for symbol in ["BTCUSD", "ETHUSD"]:
     df = get_candles(symbol, "1h")
     if df.empty or len(df) < 200: continue
 
-    # A. Trend & Indicators
+    # ================= FIXED VWAP =================
+    df['date'] = pd.to_datetime(df['time'], unit='s').dt.date
+    df['cum_vol'] = df.groupby('date')['volume'].cumsum()
+    df['cum_vol_price'] = (df['close'] * df['volume']).groupby(df['date']).cumsum()
+    df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
+
+    # ================= EXISTING =================
     df["EMA200"] = df["close"].ewm(span=200, adjust=False).mean()
-    df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
     
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     old = df.iloc[-3]
     curr_p = float(curr["close"])
 
-    # B. Order Block (OB) Identification
-    # Bullish OB: Last down candle before a strong up move
+    # OB
     bull_ob = df.iloc[-5:-2]["low"].min() if df.iloc[-1]["close"] > df.iloc[-3]["high"] else 0
-    # Bearish OB: Last up candle before a strong down move
     bear_ob = df.iloc[-5:-2]["high"].max() if df.iloc[-1]["close"] < df.iloc[-3]["low"] else 0
 
-    # C. FVG Detection (1H Imbalance)
+    # ✅ OB proximity
+    near_bull_ob = abs(curr_p - bull_ob)/curr_p < 0.01 if bull_ob else False
+    near_bear_ob = abs(curr_p - bear_ob)/curr_p < 0.01 if bear_ob else False
+
+    # FVG
     bull_fvg = old["high"] < curr["low"]
     bear_fvg = old["low"] > curr["high"]
 
-    # D. Signal Logic
+    # ✅ Trend slope improvement
+    trend_up = curr["EMA200"] > df.iloc[-2]["EMA200"]
+
     signal = "HOLD"
     entry_now = False
-    
-    # 1H Swing Long: Above EMA200 + Bull FVG + Price near OB
-    if curr_p > curr["EMA200"] and bull_fvg:
-        signal = "SWING LONG"
-        if prev["close"] <= curr["VWAP"]: entry_now = True
 
-    # 1H Swing Short: Below EMA200 + Bear FVG + Price near OB
-    elif curr_p < curr["EMA200"] and bear_fvg:
+    if curr_p > curr["EMA200"] and bull_fvg and near_bull_ob and trend_up:
+        signal = "SWING LONG"
+        momentum = curr["close"] > prev["high"]
+        if prev["close"] <= curr["VWAP"] and momentum:
+            entry_now = True
+
+    elif curr_p < curr["EMA200"] and bear_fvg and near_bear_ob and not trend_up:
         signal = "SWING SHORT"
-        if prev["close"] >= curr["VWAP"]: entry_now = True
+        momentum = curr["close"] < prev["low"]
+        if prev["close"] >= curr["VWAP"] and momentum:
+            entry_now = True
 
     market_watch.append({
-        "SYMBOL": symbol, "PRICE": curr_p, 
+        "SYMBOL": symbol, "PRICE": curr_p,
         "EMA200": round(curr["EMA200"], 2), "SIGNAL": signal
     })
 
-    # E. Execution
     active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
 
+    # ================= EXECUTION =================
     if entry_now and active_t is None:
-        side = "BUY" if "LONG" in signal else "SELL"
+
+        # ✅ COOLDOWN
+        last_trade = next((t for t in reversed(st.session_state.trades) if t["pair"] == symbol), None)
+        if last_trade:
+            try:
+                last_time = datetime.strptime(last_trade["time"], "%Y-%m-%d %H:%M")
+                diff = (datetime.now() - last_time).seconds / 3600
+                if diff < COOLDOWN_HOURS:
+                    continue
+            except:
+                pass
+
+        # ✅ RISK BASED QTY
+        sl_pct = 0.03
+        risk_amount = TOTAL_CAPITAL * RISK_PER_TRADE
+        sl_distance = curr_p * sl_pct
+        qty = round(risk_amount / sl_distance, 4)
+
         new_trade = {
-            "pair": symbol, "side": side, "entry": curr_p, 
-            "qty": round((TOTAL_CAPITAL * 0.5 * LEVERAGE) / curr_p, 4),
-            "sl": round(curr_p * 0.97 if side == "BUY" else curr_p * 1.03, 2), # 3% Swing SL
-            "target": round(curr_p * 1.05 if side == "BUY" else curr_p * 0.95, 2), # 5% Swing Target
+            "pair": symbol, "side": "BUY" if "LONG" in signal else "SELL", "entry": curr_p,
+            "qty": qty,
+            "sl": round(curr_p * 0.97 if "LONG" in signal else curr_p * 1.03, 2),
+            "target": round(curr_p * 1.05 if "LONG" in signal else curr_p * 0.95, 2),
             "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "pnl": 0.0
         }
         st.session_state.trades.append(new_trade)
         save_data(st.session_state.trades)
 
-    # F. P&L & Exit Management
+    # ================= MANAGEMENT =================
     for t in st.session_state.trades:
         if t["status"] == "OPEN" and t["pair"] == symbol:
             move = (curr_p - t["entry"]) if t["side"] == "BUY" else (t["entry"] - curr_p)
             t["pnl"] = round(move * t["qty"], 2)
 
+            # ✅ TRAILING SL
+            if t["side"] == "BUY":
+                new_sl = df.iloc[-2]["low"]
+                if new_sl > t["sl"]:
+                    t["sl"] = round(new_sl, 2)
+            else:
+                new_sl = df.iloc[-2]["high"]
+                if new_sl < t["sl"]:
+                    t["sl"] = round(new_sl, 2)
+
+            # ✅ CANDLE BASED EXIT
+            if t["side"] == "BUY":
+                hit_sl = df.iloc[-1]["low"] <= t["sl"]
+            else:
+                hit_sl = df.iloc[-1]["high"] >= t["sl"]
+
             if (t["side"] == "BUY" and curr_p >= t["target"]) or (t["side"] == "SELL" and curr_p <= t["target"]):
                 t["status"] = "CLOSED (TARGET)"
                 save_data(st.session_state.trades)
-            elif (t["side"] == "BUY" and curr_p <= t["sl"]) or (t["side"] == "SELL" and curr_p >= t["sl"]):
+
+            elif hit_sl:
                 t["status"] = "CLOSED (SL)"
                 save_data(st.session_state.trades)
 
