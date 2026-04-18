@@ -62,7 +62,13 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     df["VWAP"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
 
     # Midnight Range (23:30 - 00:30 IST)
-    range_df = df[((df['time_ist'].dt.time >= dt_time(23, 30)) | (df['time_ist'].dt.time <= dt_time(0, 30)))]
+    today = df['time_ist'].dt.date.iloc[-1]
+
+     range_df = df[
+    ((df['time_ist'].dt.date == today) & 
+    ((df['time_ist'].dt.time >= dt_time(23,30)) | 
+     (df['time_ist'].dt.time <= dt_time(0,30))))
+    ]
     orb_high = range_df["high"].max() if not range_df.empty else 0
     orb_low = range_df["low"].min() if not range_df.empty else 0
 
