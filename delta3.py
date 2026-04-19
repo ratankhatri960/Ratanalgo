@@ -114,13 +114,57 @@ for symbol in ["BTCUSD", "ETHUSD"]:
                 t["exit_t"] = datetime.now().strftime("%d/%m %H:%M:%S") # Date + Time
                 save_data()
 
-# ================= 5. DASHBOARD UI =================
-st.subheader("🔥 Live Sentiment Scan")
-st.table(pd.DataFrame(market_watch))
+# ================= 5. DASHBOARD UI (FIXED LIVE WITH INDICATORS) =================
 
-st.subheader("📋 Trade History & Management")
+st.subheader("📡 Live Market Intelligence")
+
+# ऊपर की तरफ लाइव इंडिकेटर कार्ड्स (Indicators + Price)
+t_col1, t_col2 = st.columns(2)
+
+for i, mw in enumerate(market_watch):
+    with (t_col1 if i == 0 else t_col2):
+        # सिग्नल के हिसाब से बॉर्डर कलर
+        b_color = "#2ecc71" if mw["Signal"] == "LONG" else "#e74c3c" if mw["Signal"] == "SHORT" else "#555"
+        
+        st.markdown(f"""
+            <div style="padding:20px; border-radius:15px; border-left: 10px solid {b_color}; background-color:#1e1e1e; color:white;">
+                <div style="display:flex; justify-content:between; align-items:center;">
+                    <h2 style="margin:0;">{mw['Symbol']}</h2>
+                    <span style="margin-left:auto; background:{b_color}; padding:5px 15px; border-radius:20px; font-size:14px;">{mw['Signal']}</span>
+                </div>
+                <hr style="border:0.5px solid #333;">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <div>
+                        <p style="color:#aaa; margin:0; font-size:12px;">LIVE PRICE</p>
+                        <p style="font-size:22px; font-weight:bold; margin:0;">${mw['Price']}</p>
+                    </div>
+                    <div>
+                        <p style="color:#aaa; margin:0; font-size:12px;">VWAP</p>
+                        <p style="font-size:18px; margin:0;">{mw['VWAP']}</p>
+                    </div>
+                    <div>
+                        <p style="color:#aaa; margin:0; font-size:12px;">POC (Volume)</p>
+                        <p style="font-size:18px; margin:0; color:#f1c40f;">{mw['POC']}</p>
+                    </div>
+                    <div>
+                        <p style="color:#aaa; margin:0; font-size:12px;">DELTA FLOW</p>
+                        <p style="font-size:18px; margin:0; color:{'#2ecc71' if mw['Delta'] > 0 else '#e74c3c'};">{mw['Delta']}</p>
+                    </div>
+                </div>
+                <p style="margin-top:10px; font-size:12px; color:#888;">Trend (15m): {"Bullish 📈" if mw['Signal'] == "LONG" or (mw['Price'] > mw['VWAP'] and mw['Delta'] > 0) else "Bearish 📉"}</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+st.divider()
+
+# नीचे की तरफ ट्रेड मैनेजमेंट टेबल
+st.subheader("📋 Active & Past Trades")
+
 if st.session_state.trades:
-    df_show = pd.DataFrame(st.session_state.trades).rename(columns={
+    df_show = pd.DataFrame(st.session_state.trades).copy()
+    
+    # कॉलम नाम बदलना (आपके मांगे गए ऑर्डर में)
+    df_show = df_show.rename(columns={
         "pair": "Symbol", "side": "Side", "entry": "Entry", "sl": "SL (Live)",
         "target": "Target", "pnl": "PnL", "entry_t": "Entry T", "exit_t": "Exit T"
     })
@@ -131,12 +175,13 @@ if st.session_state.trades:
 
     df_show["Action"] = df_show.apply(get_action, axis=1)
     
-    # Display columns in the requested order
-    cols = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
-    st.dataframe(df_show[cols].sort_index(ascending=False), use_container_width=True)
+    final_cols = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
+    
+    # लाइव टेबल
+    st.dataframe(df_show[final_cols].sort_index(ascending=False), use_container_width=True, hide_index=True)
 
-    # FIXED DOWNLOAD BUTTON POSITION #
+    # डाउनलोड बटन
     csv_data = pd.DataFrame(st.session_state.trades).to_csv(index=False).encode('utf-8')
-    st.download_button(label="📥 Download Trade History", data=csv_data, file_name="trading_log.csv", mime="text/csv")
+    st.download_button(label="📥 Download CSV", data=csv_data, file_name="trading_history.csv", mime="text/csv")
 else:
-    st.info("Scanning market for signals...")
+    st.info("No trades yet. Monitoring POC, Delta, and VWAP for entry...")
