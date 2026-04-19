@@ -66,21 +66,22 @@ def update_orb(symbol, price):
 
     if symbol not in state["orb"]:
         state["orb"][symbol] = {
-            "high": price,
-            "low": price,
+            "high": None,
+            "low": None,
             "active": False,
-            "buffer": []
+            "buffer": [],
+            "finalized": False   # ✅ ADD
         }
 
     orb = state["orb"][symbol]
     now = datetime.now().time()
 
-    # ORB TIME WINDOW
+    # ORB WINDOW START
     if dt_time(9, 0) <= now <= dt_time(9, 15):
         orb["active"] = True
 
-    # BUFFER BUILD
-    if orb["active"]:
+    # BUILD ONLY IN WINDOW
+    if orb["active"] and not orb["finalized"]:
         orb["buffer"].append(price)
 
         if len(orb["buffer"]) > 100:
@@ -89,16 +90,27 @@ def update_orb(symbol, price):
         orb["high"] = max(orb["buffer"])
         orb["low"] = min(orb["buffer"])
 
-    # ✅ FREEZE ORB AFTER 9:15 (ADDED)
-    if now > dt_time(9, 15):
+    # ✅ FREEZE AFTER 9:15 (IMPORTANT FIX)
+    if now > dt_time(9, 15) and not orb["finalized"]:
+        if orb["buffer"]:
+            orb["high"] = max(orb["buffer"])
+            orb["low"] = min(orb["buffer"])
         orb["active"] = False
+        orb["finalized"] = True
+        orb["buffer"] = []   # clear buffer
 
-# ================= ORB BREAKOUT CHECK =================
+    # ✅ SAFETY (same value fix)
+    if orb["high"] is None:
+        orb["high"] = price
+    if orb["low"] is None:
+        orb["low"] = price
+
+# ================= ORB BREAKOUT =================
 def orb_breakout(symbol, price):
     orb = state["orb"][symbol]
     now = datetime.now().time()
 
-    # ✅ ALLOW BREAKOUT ONLY AFTER ORB WINDOW (ADDED)
+    # breakout only after freeze
     if now <= dt_time(9, 15):
         return None
 
@@ -137,7 +149,7 @@ for symbol in symbols:
 
     signal, direction = generate_signal(price)
 
-    # ORB BREAKOUT OVERRIDE
+    # ORB BREAKOUT
     orb_signal = orb_breakout(symbol, price)
     if orb_signal:
         signal = orb_signal
@@ -152,7 +164,7 @@ for symbol in symbols:
 
     active = any(p["status"] == "OPEN" and p["symbol"] == symbol for p in state["positions"])
 
-    # ✅ COOLDOWN ADD (NO DELETE)
+    # COOLDOWN
     last_trade = next((p for p in reversed(state["positions"]) if p["symbol"] == symbol), None)
 
     cooldown_ok = True
@@ -178,6 +190,9 @@ for symbol in symbols:
         state["positions"].append(position)
         save_state(state)
 
+# ✅ IMPORTANT: persist ORB every tick
+save_state(state)
+
 # ================= UI =================
 st.subheader("📊 Live Market Watch")
 st.table(pd.DataFrame(market_watch))
@@ -188,15 +203,3 @@ st.subheader("📋 Trades")
 
 if state["positions"]:
     st.dataframe(pd.DataFrame(state["positions"]), use_container_width=True)
-
-st.subheader("📋 Trades")
-
-if state["positions"]:
-    df = pd.DataFrame(state["positions"])
-    st.dataframe(df, use_container_width=True)
-
-st.subheader("📋 Trades")
-
-if state["positions"]:
-    df = pd.DataFrame(state["positions"])
-    st.dataframe(df, use_container_width=True)
