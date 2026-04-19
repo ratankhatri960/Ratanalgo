@@ -134,8 +134,6 @@ if st.session_state.trades:
     # Display columns in the requested order
     cols = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
     st.dataframe(df_show[cols].sort_index(ascending=False), use_container_width=True)
-else:
-    st.info("Scanning market for the next high-probability setup...")
 
     # FIXED DOWNLOAD BUTTON POSITION #
     csv_data = pd.DataFrame(st.session_state.trades).to_csv(index=False).encode('utf-8')
