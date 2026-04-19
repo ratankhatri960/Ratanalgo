@@ -98,6 +98,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     market_watch.append({
         "Symbol": symbol,
         "Price": curr_p,
+        "VWAP": vwap_val,   # ✅ FIXED (missing tha)
         "POC": poc_val,
         "Delta": delta_flow,
         "Signal": signal
@@ -179,7 +180,7 @@ else:
                         </div>
                         <div>
                             <p style="color:#888; margin:0; font-size:12px; letter-spacing:1px;">VWAP</p>
-                            <p style="font-size:20px; margin:0; color:#ddd;">{mw.get('vwap')}</p>
+                            <p style="font-size:20px; margin:0; color:#ddd;">{mw.get('VWAP')}</p>
                         </div>
                         <div>
                             <p style="color:#888; margin:0; font-size:12px; letter-spacing:1px;">POC (MAX VOL)</p>
