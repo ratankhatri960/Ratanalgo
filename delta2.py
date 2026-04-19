@@ -18,7 +18,7 @@ RISK_PER_TRADE = 0.02
 SL_PCT = 0.005
 T1_PCT = 0.005
 COOLDOWN_MIN = 15
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 
 # ================= 2. DATA FUNCTIONS =================
 def load_history():
