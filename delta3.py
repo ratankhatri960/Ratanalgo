@@ -80,7 +80,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 
     curr_p = float(df.iloc[-1]["close"])
     vwap_val = round(df.iloc[-1]["vwap"], 2)
-    delta_flow = df["delta"].tail(5).sum()
+    delta_flow = df["delta"].tail(10).sum()
     poc_val = calculate_poc(df.tail(20))
 
     # Trend Check
