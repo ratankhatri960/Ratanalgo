@@ -92,12 +92,12 @@ def update_orb(symbol, price):
 
     # ✅ DAILY RESET
     if orb.get("date") != today:
-    orb["high"] = None
-    orb["low"] = None
-    orb["buffer"] = []
-    orb["active"] = False
-    orb["finalized"] = False
-    orb["date"] = today
+       orb["high"] = None
+       orb["low"] = None
+       orb["buffer"] = []
+       orb["active"] = False
+       orb["finalized"] = False
+       orb["date"] = today
 
     if price is None:
         return
