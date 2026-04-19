@@ -91,13 +91,13 @@ def update_orb(symbol, price):
     today = now.strftime("%Y-%m-%d")
 
     # ✅ DAILY RESET
-    if orb["date"] != today:
-        orb["high"] = None
-        orb["low"] = None
-        orb["buffer"] = []
-        orb["active"] = False
-        orb["finalized"] = False
-        orb["date"] = today
+    if orb.get("date") != today:
+    orb["high"] = None
+    orb["low"] = None
+    orb["buffer"] = []
+    orb["active"] = False
+    orb["finalized"] = False
+    orb["date"] = today
 
     if price is None:
         return
