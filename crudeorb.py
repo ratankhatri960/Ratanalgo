@@ -34,7 +34,7 @@ def save_state(state):
 
 state = load_state()
 
-# ================= PRICE FEED (SIM / REPLACE WITH DHAN LATER) =================
+# ================= PRICE FEED =================
 def get_price(symbol):
     base = {"CRUDEOIL": 6500, "NATURALGAS": 280}[symbol]
     return base + random.randint(-120, 120)
@@ -58,7 +58,7 @@ def generate_signal(price):
         return "SELL", "DOWN"
     return "HOLD", None
 
-# ================= ORB FIX (IMPORTANT ADDITION - NO DELETE) =================
+# ================= ORB FIX =================
 def update_orb(symbol, price):
 
     if "orb" not in state:
@@ -73,14 +73,13 @@ def update_orb(symbol, price):
         }
 
     orb = state["orb"][symbol]
-
     now = datetime.now().time()
 
     # ORB TIME WINDOW
     if dt_time(9, 0) <= now <= dt_time(9, 15):
         orb["active"] = True
 
-    # BUFFER BASED HIGH LOW (FIX)
+    # BUFFER BUILD
     if orb["active"]:
         orb["buffer"].append(price)
 
@@ -90,16 +89,17 @@ def update_orb(symbol, price):
         orb["high"] = max(orb["buffer"])
         orb["low"] = min(orb["buffer"])
 
-    else:
-        # safe fallback
-        orb["high"] = price if orb["high"] is None else orb["high"]
-        orb["low"] = price if orb["low"] is None else orb["low"]
+    # ✅ FREEZE ORB AFTER 9:15 (ADDED)
+    if now > dt_time(9, 15):
+        orb["active"] = False
 
 # ================= ORB BREAKOUT CHECK =================
 def orb_breakout(symbol, price):
     orb = state["orb"][symbol]
+    now = datetime.now().time()
 
-    if not orb["active"]:
+    # ✅ ALLOW BREAKOUT ONLY AFTER ORB WINDOW (ADDED)
+    if now <= dt_time(9, 15):
         return None
 
     if price > orb["high"]:
@@ -109,7 +109,7 @@ def orb_breakout(symbol, price):
 
     return None
 
-# ================= STRIKE SELECTION =================
+# ================= STRIKE =================
 def select_strike(chain, spot, signal):
     atm = min(chain, key=lambda x: abs(x["strike"] - spot))["strike"]
 
@@ -137,7 +137,7 @@ for symbol in symbols:
 
     signal, direction = generate_signal(price)
 
-    # ORB BREAKOUT FORCE OVERRIDE (IMPORTANT FIX)
+    # ORB BREAKOUT OVERRIDE
     orb_signal = orb_breakout(symbol, price)
     if orb_signal:
         signal = orb_signal
@@ -152,7 +152,16 @@ for symbol in symbols:
 
     active = any(p["status"] == "OPEN" and p["symbol"] == symbol for p in state["positions"])
 
-    if signal != "HOLD" and not active:
+    # ✅ COOLDOWN ADD (NO DELETE)
+    last_trade = next((p for p in reversed(state["positions"]) if p["symbol"] == symbol), None)
+
+    cooldown_ok = True
+    if last_trade:
+        last_time = datetime.fromisoformat(last_trade["time"])
+        if (datetime.now() - last_time).seconds < 300:
+            cooldown_ok = False
+
+    if signal != "HOLD" and not active and cooldown_ok:
 
         sl = price * (0.995 if signal == "BUY" else 1.005)
 
@@ -179,6 +188,12 @@ st.subheader("📋 Trades")
 
 if state["positions"]:
     st.dataframe(pd.DataFrame(state["positions"]), use_container_width=True)
+
+st.subheader("📋 Trades")
+
+if state["positions"]:
+    df = pd.DataFrame(state["positions"])
+    st.dataframe(df, use_container_width=True)
 
 st.subheader("📋 Trades")
 
