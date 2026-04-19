@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import requests
 import time
 import os
 import json
@@ -18,31 +17,39 @@ STATE_FILE = "mcx_state.json"
 TOTAL_CAPITAL = 10000
 RISK = 0.02
 
-# ================= MARKET TIME =================
+# ================= MARKET TIME (FIXED WITH DAY) =================
 def is_market_open():
-    now = datetime.now().time()
-    return dt_time(9, 0) <= now <= dt_time(23, 30)
+    now = datetime.now()
+    current_time = now.time()
+    current_day = now.weekday()  # Mon=0 Sun=6
+
+    if current_day >= 5:  # Sat/Sun closed
+        return False
+
+    return dt_time(9, 0) <= current_time <= dt_time(23, 30)
 
 # ================= STATE =================
 def load_state():
     if os.path.exists(STATE_FILE):
-        return json.load(open(STATE_FILE))
+        try:
+            return json.load(open(STATE_FILE))
+        except:
+            return {"positions": [], "orb": {}}
     return {"positions": [], "orb": {}}
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except:
+        pass
 
 state = load_state()
 
-# ================= PRICE (NO RANDOM WHEN CLOSED) =================
+# ================= PRICE (NO FAKE DATA) =================
 def get_price(symbol):
-    if not is_market_open():
-        return None
-    
-    # ⚠️ अभी placeholder है — यहां real API लगाना होगा
-    base = {"CRUDEOIL": 6500, "NATURALGAS": 280}[symbol]
-    return base  # 👈 random हटाया
+    # ❌ No API yet → treat as no data
+    return None
 
 # ================= OPTION CHAIN =================
 def get_chain(spot):
@@ -74,20 +81,32 @@ def update_orb(symbol, price):
             "low": None,
             "buffer": [],
             "active": False,
-            "finalized": False
+            "finalized": False,
+            "date": None
         }
 
     orb = state["orb"][symbol]
-    now = datetime.now().time()
+    now = datetime.now()
+    current_time = now.time()
+    today = now.strftime("%Y-%m-%d")
+
+    # ✅ DAILY RESET
+    if orb["date"] != today:
+        orb["high"] = None
+        orb["low"] = None
+        orb["buffer"] = []
+        orb["active"] = False
+        orb["finalized"] = False
+        orb["date"] = today
 
     if price is None:
         return
 
     # ORB window
-    if dt_time(9, 0) <= now <= dt_time(9, 15):
+    if dt_time(9, 0) <= current_time <= dt_time(9, 15):
         orb["active"] = True
 
-    # BUILD FIX
+    # BUILD
     if orb["active"] and not orb["finalized"]:
         orb["buffer"].append(float(price))
 
@@ -96,7 +115,7 @@ def update_orb(symbol, price):
             orb["low"] = min(orb["buffer"])
 
     # FREEZE
-    if now > dt_time(9, 15) and not orb["finalized"]:
+    if current_time > dt_time(9, 15) and not orb["finalized"]:
         if orb["buffer"]:
             orb["high"] = max(orb["buffer"])
             orb["low"] = min(orb["buffer"])
@@ -105,9 +124,10 @@ def update_orb(symbol, price):
         orb["buffer"] = []
 
     # SAME VALUE FIX
-    if orb["high"] == orb["low"]:
-        orb["high"] = orb["high"] + 0.5
-        orb["low"] = orb["low"] - 0.5
+    if orb["high"] is not None and orb["low"] is not None:
+        if orb["high"] == orb["low"]:
+            orb["high"] += 0.5
+            orb["low"] -= 0.5
 
 # ================= ORB BREAKOUT =================
 def orb_breakout(symbol, price):
@@ -118,6 +138,9 @@ def orb_breakout(symbol, price):
     now = datetime.now().time()
 
     if now <= dt_time(9, 15):
+        return None
+
+    if orb["high"] is None or orb["low"] is None:
         return None
 
     if price > orb["high"]:
@@ -134,14 +157,14 @@ def select_strike(chain, spot, signal):
 
     atm = min(chain, key=lambda x: abs(x["strike"] - spot))["strike"]
 
-    if signal == "BUY":
-        return atm, "CE"
-    else:
-        return atm, "PE"
+    return (atm, "CE") if signal == "BUY" else (atm, "PE")
 
 # ================= RISK =================
 def qty(capital, risk, sl):
-    return max(int((capital * risk) / sl), 1)
+    try:
+        return max(int((capital * risk) / sl), 1)
+    except:
+        return 1
 
 # ================= MAIN =================
 market_watch = []
@@ -149,7 +172,7 @@ symbols = ["CRUDEOIL", "NATURALGAS"]
 
 for symbol in symbols:
 
-    price = get_price(symbol)
+    price = get_price(symbol)  # हमेशा None (no fake data)
     chain = get_chain(price)
 
     update_orb(symbol, price)
@@ -163,7 +186,7 @@ for symbol in symbols:
 
     market_watch.append({
         "SYMBOL": symbol,
-        "PRICE": price if price else "MARKET CLOSED",
+        "PRICE": "MARKET CLOSED",
         "SIGNAL": signal,
         "ORB HIGH": orb.get("high"),
         "ORB LOW": orb.get("low")
@@ -210,7 +233,6 @@ for p in state["positions"]:
                 new_sl = curr_price - gap
                 if new_sl > p["sl"]:
                     p["sl"] = round(new_sl, 2)
-
             else:
                 new_sl = curr_price + gap
                 if new_sl < p["sl"]:
