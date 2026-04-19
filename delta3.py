@@ -14,7 +14,7 @@ CSV_FILE = "poc_delta_history_dated.csv"
 st_autorefresh(interval=10000, key="refresh")
 
 TOTAL_CAPITAL = 1000
-BASE_URL = "https://delta.exchange"
+BASE_URL = "https://api.india.delta.exchange"
 SL_VAL_PCT = 0.005
 T1_VAL_PCT = 0.005
 COOLDOWN_MIN = 15
