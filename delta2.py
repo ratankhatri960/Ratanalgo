@@ -127,7 +127,7 @@ for i, mw in enumerate(market_watch):
                     <div><p style="color:#888;margin:0;font-size:12px;">PRICE</p><b>${mw['Price']}</b></div>
                     <div><p style="color:#888;margin:0;font-size:12px;">VWAP</p><b>{mw['VWAP']}</b></div>
                     <div><p style="color:#888;margin:0;font-size:12px;">POC</p><b style="color:#f1c40f;">{mw['POC']}</b></div>
-                    <div><p style="color:#888;margin:0;font-size:12px;">DELTA</p><b style="color:{color};">{mw['Delta']}</b></div>
+                    <div><p style="color:#888;margin:0;font-size:12px;">DELTA</p><b style="color:#ffffff;">{mw['Delta']}</b></div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
