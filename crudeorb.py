@@ -4,13 +4,12 @@ import requests
 import time
 import os
 import json
-import random
 from datetime import datetime, time as dt_time
 from streamlit_autorefresh import st_autorefresh
 
 # ================= CONFIG =================
 st.set_page_config(layout="wide", page_title="MCX ORB Pro Engine FINAL")
-st.title("🤖 MCX ORB Pro Engine (Final Stable Version)")
+st.title("🤖 MCX ORB Pro Engine (Stable Final Fix)")
 
 st_autorefresh(interval=5000, key="refresh")
 
@@ -36,21 +35,20 @@ def save_state(state):
 
 state = load_state()
 
-# ================= PRICE FEED =================
+# ================= PRICE (NO RANDOM WHEN CLOSED) =================
 def get_price(symbol):
     if not is_market_open():
         return None
+    
+    # ⚠️ अभी placeholder है — यहां real API लगाना होगा
     base = {"CRUDEOIL": 6500, "NATURALGAS": 280}[symbol]
-    return base + random.randint(-50, 50)
+    return base  # 👈 random हटाया
 
 # ================= OPTION CHAIN =================
 def get_chain(spot):
     if spot is None:
         return []
-    return [
-        {"strike": spot + i * 50, "ce_oi": random.randint(1000, 50000), "pe_oi": random.randint(1000, 50000)}
-        for i in range(-10, 11)
-    ]
+    return [{"strike": spot + i * 50} for i in range(-5, 6)]
 
 # ================= SIGNAL =================
 def generate_signal(price):
@@ -85,14 +83,19 @@ def update_orb(symbol, price):
     if price is None:
         return
 
+    # ORB window
     if dt_time(9, 0) <= now <= dt_time(9, 15):
         orb["active"] = True
 
+    # BUILD FIX
     if orb["active"] and not orb["finalized"]:
-        orb["buffer"].append(price)
-        orb["high"] = max(orb["buffer"])
-        orb["low"] = min(orb["buffer"])
+        orb["buffer"].append(float(price))
 
+        if len(orb["buffer"]) >= 3:
+            orb["high"] = max(orb["buffer"])
+            orb["low"] = min(orb["buffer"])
+
+    # FREEZE
     if now > dt_time(9, 15) and not orb["finalized"]:
         if orb["buffer"]:
             orb["high"] = max(orb["buffer"])
@@ -101,10 +104,10 @@ def update_orb(symbol, price):
         orb["finalized"] = True
         orb["buffer"] = []
 
-    if orb["high"] is None:
-        orb["high"] = price
-    if orb["low"] is None:
-        orb["low"] = price
+    # SAME VALUE FIX
+    if orb["high"] == orb["low"]:
+        orb["high"] = orb["high"] + 0.5
+        orb["low"] = orb["low"] - 0.5
 
 # ================= ORB BREAKOUT =================
 def orb_breakout(symbol, price):
@@ -152,36 +155,27 @@ for symbol in symbols:
     update_orb(symbol, price)
     orb = state["orb"].get(symbol, {})
 
-    signal, direction = generate_signal(price)
+    signal, _ = generate_signal(price)
 
     orb_signal = orb_breakout(symbol, price)
     if orb_signal:
         signal = orb_signal
-
-    strike, opt_type = select_strike(chain, price, signal)
 
     market_watch.append({
         "SYMBOL": symbol,
         "PRICE": price if price else "MARKET CLOSED",
         "SIGNAL": signal,
         "ORB HIGH": orb.get("high"),
-        "ORB LOW": orb.get("low"),
-        "STRIKE": strike,
-        "TYPE": opt_type
+        "ORB LOW": orb.get("low")
     })
 
     active = any(p["status"] == "OPEN" and p["symbol"] == symbol for p in state["positions"])
 
-    last_trade = next((p for p in reversed(state["positions"]) if p["symbol"] == symbol), None)
-    cooldown_ok = True
-    if last_trade:
-        last_time = datetime.fromisoformat(last_trade["time"])
-        if (datetime.now() - last_time).seconds < 300:
-            cooldown_ok = False
-
-    if price is not None and signal not in ["HOLD", "MARKET CLOSED"] and not active and cooldown_ok:
+    if price is not None and signal not in ["HOLD", "MARKET CLOSED"] and not active:
 
         sl = price * (0.995 if signal == "BUY" else 1.005)
+
+        strike, opt_type = select_strike(chain, price, signal)
 
         position = {
             "symbol": symbol,
@@ -198,7 +192,7 @@ for symbol in symbols:
         state["positions"].append(position)
         save_state(state)
 
-# ================= TRAILING SL ENGINE (ADDED) =================
+# ================= TRAILING SL =================
 for p in state["positions"]:
     if p["status"] == "OPEN":
 
@@ -210,15 +204,15 @@ for p in state["positions"]:
 
         if move > (p["entry"] * 0.002):
 
-            trail_gap = p["entry"] * 0.002
+            gap = p["entry"] * 0.002
 
             if p["side"] == "BUY":
-                new_sl = curr_price - trail_gap
+                new_sl = curr_price - gap
                 if new_sl > p["sl"]:
                     p["sl"] = round(new_sl, 2)
 
-            elif p["side"] == "SELL":
-                new_sl = curr_price + trail_gap
+            else:
+                new_sl = curr_price + gap
                 if new_sl < p["sl"]:
                     p["sl"] = round(new_sl, 2)
 
@@ -235,8 +229,11 @@ st.subheader("📋 Trades")
 if state["positions"]:
     df = pd.DataFrame(state["positions"])
 
-    # ✅ LIVE SL DISPLAY
-    df_display = df.rename(columns={"sl": "Live SL"})
+    df_display = df.rename(columns={
+        "sl": "Live SL",
+        "strike": "Strike",
+        "option": "Option"
+    })
 
     st.dataframe(df_display.sort_index(ascending=False), use_container_width=True)
 else:
