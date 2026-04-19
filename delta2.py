@@ -7,11 +7,11 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # ================= 1. CONFIG =================
-st.set_page_config(layout="wide", page_title="Delta AI: FVG + POC Engine")
+st.set_page_config(layout="wide", page_title="Delta AI Pro")
 st.title("🤖 Delta AI Pro: FVG Momentum + POC Volume")
 
 CSV_FILE = "fvg_poc_trade_history.csv"
-st_autorefresh(interval=8000, key="refresh") # 8 sec refresh
+st_autorefresh(interval=8000, key="refresh") 
 
 TOTAL_CAPITAL = 1000
 RISK_PER_TRADE = 0.02
@@ -20,12 +20,16 @@ T1_PCT = 0.005
 COOLDOWN_MIN = 15
 BASE_URL = "https://delta.exchange"
 
-# ================= 2. STATE & DATA =================
-if "trades" not in st.session_state:
+# ================= 2. DATA FUNCTIONS =================
+def load_history():
     if os.path.exists(CSV_FILE):
-        try: st.session_state.trades = pd.read_csv(CSV_FILE).to_dict('records')
-        except: st.session_state.trades = []
-    else: st.session_state.trades = []
+        try:
+            return pd.read_csv(CSV_FILE).to_dict('records')
+        except: return []
+    return []
+
+if "trades" not in st.session_state:
+    st.session_state.trades = load_history()
 
 if "last_candle" not in st.session_state: st.session_state.last_candle = {}
 
@@ -53,13 +57,15 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     # Indicators
     df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
     df["delta"] = df["volume"].where(df["close"] > df["open"], -df["volume"])
-    df['poc'] = df.tail(20).groupby(df['close'].round(2))['volume'].sum().idxmax()
+    
+    # POC Logic
+    df['price_bin'] = df['close'].round(2)
+    poc_val = df.tail(20).groupby('price_bin')['volume'].sum().idxmax()
     
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     curr_p = float(curr["close"])
     vwap_val = round(curr['vwap'], 2)
-    poc_val = curr['poc']
     delta_val = int(df["delta"].tail(5).sum())
 
     # FVG Logic
@@ -71,7 +77,6 @@ for symbol in ["BTCUSD", "ETHUSD"]:
     trend_df["ema50"] = trend_df["close"].ewm(span=50).mean()
     bullish_trend = trend_df.iloc[-1]["ema20"] > trend_df.iloc[-1]["ema50"]
 
-    # --- SIGNAL (FVG + POC + TREND) ---
     signal = "HOLD"
     if bullish_trend and curr_p > vwap_val and curr_p > poc_val and bull_fvg and delta_val > 0:
         signal = "LONG"
@@ -80,8 +85,7 @@ for symbol in ["BTCUSD", "ETHUSD"]:
 
     market_watch.append({"Symbol": symbol, "Price": curr_p, "VWAP": vwap_val, "POC": poc_val, "Delta": delta_val, "Signal": signal})
 
-    # ENTRY EXECUTION
-    active = next((t for t in st.session_state.trades if t["pair"] == symbol and t["status"] == "OPEN"), None)
+    active = next((t for t in st.session_state.trades if t.get("status") == "OPEN" and t.get("pair") == symbol), None)
     
     if signal != "HOLD" and active is None and st.session_state.last_candle.get(symbol) != curr['time']:
         sl = curr_p * (1 - SL_PCT) if signal == "LONG" else curr_p * (1 + SL_PCT)
@@ -96,24 +100,16 @@ for symbol in ["BTCUSD", "ETHUSD"]:
         st.session_state.last_candle[symbol] = curr['time']
         save_history()
 
-    # MANAGEMENT (Trailing SL)
+    # MANAGEMENT
     for t in st.session_state.trades:
-        if t["status"] == "OPEN" and t["pair"] == symbol:
+        if t.get("status") == "OPEN" and t.get("pair") == symbol:
             move = (curr_p - t["entry"]) if t["side"] == "LONG" else (t["entry"] - curr_p)
-            t["pnl"] = round(move * t["qty"], 2)
+            t["pnl"] = round(move * t.get("qty", 0), 2)
             
-            # T1 Hit: Move SL to Breakeven
-            if not t["partial"] and (curr_p >= t["target"] if t["side"] == "LONG" else curr_p <= t["target"]):
+            if not t.get("partial") and (curr_p >= t["target"] if t["side"] == "LONG" else curr_p <= t["target"]):
                 t["partial"], t["sl"] = True, t["entry"]
                 save_history()
 
-            # Active Trailing (Prev Candle High/Low)
-            if t["partial"]:
-                trail_price = prev["low"] if t["side"] == "LONG" else prev["high"]
-                if t["side"] == "LONG" and trail_price > t["sl"]: t["sl"] = round(trail_price, 2)
-                elif t["side"] == "SHORT" and trail_price < t["sl"]: t["sl"] = round(trail_price, 2)
-
-            # Exit Hit
             if (curr_p <= t["sl"] if t["side"] == "LONG" else curr_p >= t["sl"]):
                 t["status"], t["exit_t"] = "CLOSED", datetime.now().strftime("%d/%m %H:%M:%S")
                 save_history()
@@ -139,17 +135,26 @@ for i, mw in enumerate(market_watch):
 st.divider()
 st.subheader("📋 Trade Management Dashboard")
 if st.session_state.trades:
-    df_disp = pd.DataFrame(st.session_state.trades).copy()
-    df_disp = df_disp.rename(columns={
+    df_raw = pd.DataFrame(st.session_state.trades)
+    
+    # कॉलम रिनेम करने से पहले चेक करें कि कॉलम मौजूद हैं या नहीं
+    mapping = {
         "pair": "Symbol", "side": "Side", "entry": "Entry", "sl": "SL (Live)",
         "target": "Target", "pnl": "PnL", "entry_t": "Entry T", "exit_t": "Exit T"
-    })
-    df_disp["Action"] = df_disp.apply(lambda r: "🔴 Closed" if r["status"]=="CLOSED" else ("✅ T1 Hit" if r["partial"] else "🟢 Running"), axis=1)
+    }
     
-    cols = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
-    st.dataframe(df_show := df_disp[cols].sort_index(ascending=False), use_container_width=True, hide_index=True)
-    st.download_button("📥 Download Trade History", df_show.to_csv(index=False).encode('utf-8'), "trades.csv", "text/csv")
+    # केवल वही कॉलम चुनें जो डेटाफ्रेम में उपलब्ध हों
+    existing_cols = [c for c in mapping.keys() if c in df_raw.columns]
+    df_filtered = df_raw[existing_cols].rename(columns=mapping)
+    
+    # Action कॉलम जोड़ें
+    if "status" in df_raw.columns:
+        df_filtered["Action"] = df_raw.apply(lambda r: "🔴 Closed" if r.get("status")=="CLOSED" else ("✅ T1 Hit" if r.get("partial") else "🟢 Running"), axis=1)
+    
+    # डिस्प्ले आर्डर पक्का करें
+    final_order = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
+    display_cols = [c for c in final_order if c in df_filtered.columns]
+    
+    st.dataframe(df_filtered[display_cols].sort_index(ascending=False), use_container_width=True, hide_index=True)
 else:
-    st.info("Searching for FVG + POC Momentum...")
-
-
+    st.info("No trades found.")
