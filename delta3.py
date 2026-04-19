@@ -137,7 +137,7 @@ if st.session_state.trades:
 else:
     st.info("Scanning market for the next high-probability setup...")
 
-         --- FIXED DOWNLOAD BUTTON POSITION ---
+    # FIXED DOWNLOAD BUTTON POSITION #
     csv_data = pd.DataFrame(st.session_state.trades).to_csv(index=False).encode('utf-8')
     st.download_button(label="📥 Download Trade History", data=csv_data, file_name="trading_log.csv", mime="text/csv")
 else:
