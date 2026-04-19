@@ -6,251 +6,150 @@ import os
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-# ================= 1. CONFIG & SETTINGS =================
-st.set_page_config(layout="wide", page_title="Delta AI Pro Engine")
-st.title("🤖 Delta AI Pro: Smart Trailing & P&L")
+# ================= 1. CONFIG =================
+st.set_page_config(layout="wide", page_title="Delta AI: FVG + POC Engine")
+st.title("🤖 Delta AI Pro: FVG Momentum + POC Volume")
 
-st_autorefresh(interval=5000, key="refresh")
+CSV_FILE = "fvg_poc_trade_history.csv"
+st_autorefresh(interval=8000, key="refresh") # 8 sec refresh
 
 TOTAL_CAPITAL = 1000
-ALLOCATION = {"BTCUSD": 0.60, "ETHUSD": 0.40}
-LEVERAGE = 25
-CSV_FILE = "final_trade_history.csv"
-
-SL_PCT = 0.005        
-T1_PCT = 0.005        
-SECURE_PCT = 0.00025  
-
-# ✅ NEW (Risk + Cooldown)
 RISK_PER_TRADE = 0.02
+SL_PCT = 0.005
+T1_PCT = 0.005
 COOLDOWN_MIN = 15
+BASE_URL = "https://delta.exchange"
 
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
-CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
-BASE_URL = "https://api.india.delta.exchange"
-
-# ================= 2. DATA FUNCTIONS =================
-def load_data():
+# ================= 2. STATE & DATA =================
+if "trades" not in st.session_state:
     if os.path.exists(CSV_FILE):
-        try:
-            df = pd.read_csv(CSV_FILE)
-            return df.to_dict('records')
-        except: return []
-    return []
+        try: st.session_state.trades = pd.read_csv(CSV_FILE).to_dict('records')
+        except: st.session_state.trades = []
+    else: st.session_state.trades = []
 
-def save_data(trades):
-    if trades:
-        pd.DataFrame(trades).to_csv(CSV_FILE, index=False)
+if "last_candle" not in st.session_state: st.session_state.last_candle = {}
 
-def send_telegram(msg):
-    try:
-        if not TELEGRAM_TOKEN or not CHAT_ID: return
-        # ✅ FIXED URL
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
-    except: pass
+def save_history():
+    if st.session_state.trades:
+        pd.DataFrame(st.session_state.trades).to_csv(CSV_FILE, index=False)
 
 def get_candles(symbol, tf="5m"):
     try:
         now = int(time.time())
-        r = requests.get(f"{BASE_URL}/v2/history/candles",
-            # ✅ MORE DATA FOR STABILITY
-            params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now}, timeout=10)
-        data = r.json()
-        if "result" in data:
-            df = pd.DataFrame(data["result"]).sort_values("time")
-            for c in ["open","high","low","close","volume"]:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-            return df.dropna()
+        r = requests.get(f"{BASE_URL}/v2/history/candles", 
+                         params={"symbol": symbol, "resolution": tf, "start": now-86400, "end": now}, timeout=10).json()
+        df = pd.DataFrame(r["result"]).sort_values("time")
+        for c in ["open","high","low","close","volume"]: df[c] = pd.to_numeric(df[c])
+        return df.dropna()
     except: return pd.DataFrame()
 
-# ================= 3. SESSION STATE =================
-if "trades" not in st.session_state:
-    st.session_state.trades = load_data()
-
-# ================= 4. CORE ENGINE =================
+# ================= 3. ENGINE LOGIC =================
 market_watch = []
-
 for symbol in ["BTCUSD", "ETHUSD"]:
-    df = get_candles(symbol)
+    df = get_candles(symbol, "5m")
+    trend_df = get_candles(symbol, "15m")
     if df.empty or len(df) < 50: continue
 
-    df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
-    df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
-
-    # ✅ VWAP FIX (SESSION BASED)
-    df['date'] = pd.to_datetime(df['time'], unit='s').dt.date
-    df['cum_vol'] = df.groupby('date')['volume'].cumsum()
-    df['cum_vol_price'] = (df['close'] * df['volume']).groupby(df['date']).cumsum()
-    df['VWAP'] = df['cum_vol_price'] / df['cum_vol']
+    # Indicators
+    df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
+    df["delta"] = df["volume"].where(df["close"] > df["open"], -df["volume"])
+    df['poc'] = df.tail(20).groupby(df['close'].round(2))['volume'].sum().idxmax()
     
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     curr_p = float(curr["close"])
-    vwap_val = round(curr["VWAP"], 2)
-    
-    # ✅ FVG FIX
+    vwap_val = round(curr['vwap'], 2)
+    poc_val = curr['poc']
+    delta_val = int(df["delta"].tail(5).sum())
+
+    # FVG Logic
     bull_fvg = df.iloc[-3]["high"] < df.iloc[-1]["low"]
     bear_fvg = df.iloc[-3]["low"] > df.iloc[-1]["high"]
 
-    is_bull = curr_p > vwap_val and curr["EMA20"] > curr["EMA50"] and bull_fvg
-    is_bear = curr_p < vwap_val and curr["EMA20"] < curr["EMA50"] and bear_fvg
-    
-    was_bull = prev["close"] > prev["VWAP"] and prev["EMA20"] > prev["EMA50"]
-    was_bear = prev["close"] < prev["VWAP"] and prev["EMA20"] < prev["EMA50"]
+    # 15m Trend
+    trend_df["ema20"] = trend_df["close"].ewm(span=20).mean()
+    trend_df["ema50"] = trend_df["close"].ewm(span=50).mean()
+    bullish_trend = trend_df.iloc[-1]["ema20"] > trend_df.iloc[-1]["ema50"]
 
+    # --- SIGNAL (FVG + POC + TREND) ---
     signal = "HOLD"
-    is_fresh_setup = False
-    if is_bull:
-        signal = "BUY"
-        if not was_bull: is_fresh_setup = True
-    elif is_bear:
-        signal = "SELL"
-        if not was_bear: is_fresh_setup = True
+    if bullish_trend and curr_p > vwap_val and curr_p > poc_val and bull_fvg and delta_val > 0:
+        signal = "LONG"
+    elif not bullish_trend and curr_p < vwap_val and curr_p < poc_val and bear_fvg and delta_val < 0:
+        signal = "SHORT"
 
-    market_watch.append({"SYMBOL": symbol, "PRICE": curr_p, "VWAP": vwap_val, "SIGNAL": signal})
+    market_watch.append({"Symbol": symbol, "Price": curr_p, "VWAP": vwap_val, "POC": poc_val, "Delta": delta_val, "Signal": signal})
 
-    active_t = next((t for t in st.session_state.trades if t["status"] == "OPEN" and t["pair"] == symbol), None)
+    # ENTRY EXECUTION
+    active = next((t for t in st.session_state.trades if t["pair"] == symbol and t["status"] == "OPEN"), None)
+    
+    if signal != "HOLD" and active is None and st.session_state.last_candle.get(symbol) != curr['time']:
+        sl = curr_p * (1 - SL_PCT) if signal == "LONG" else curr_p * (1 + SL_PCT)
+        t1 = curr_p * (1 + T1_PCT) if signal == "LONG" else curr_p * (1 - T1_PCT)
+        qty = round((TOTAL_CAPITAL * RISK_PER_TRADE) / (curr_p * SL_PCT), 4)
 
-    # ================= EXECUTION =================
-    if is_fresh_setup and active_t is None:
+        st.session_state.trades.append({
+            "pair": symbol, "side": signal, "entry": curr_p, "qty": qty, "sl": round(sl, 2), "target": round(t1, 2),
+            "status": "OPEN", "pnl": 0.0, "entry_t": datetime.now().strftime("%d/%m %H:%M:%S"),
+            "exit_t": "-", "partial": False
+        })
+        st.session_state.last_candle[symbol] = curr['time']
+        save_history()
 
-        # ✅ COOLDOWN ADD
-        last_trade = next((t for t in reversed(st.session_state.trades) if t["pair"] == symbol), None)
-        if last_trade:
-            try:
-                last_time = datetime.strptime(last_trade["time"], "%Y-%m-%d %H:%M:%S")
-                diff = (datetime.now() - last_time).seconds / 60
-                if diff < COOLDOWN_MIN:
-                    continue
-            except:
-                pass
-
-        # ✅ RISK BASED QTY
-        risk_amount = TOTAL_CAPITAL * RISK_PER_TRADE
-        sl_distance = curr_p * SL_PCT
-        qty = round(risk_amount / sl_distance, 4)
-
-        new_trade = {
-            "pair": symbol, "side": signal, "entry": curr_p, "qty": qty,
-            "sl": round(curr_p * (1 - SL_PCT) if signal == "BUY" else curr_p * (1 + SL_PCT), 2),
-            "target1": round(curr_p * (1 + T1_PCT) if signal == "BUY" else curr_p * (1 - T1_PCT), 2),
-            "status": "OPEN", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "exit": None, "partial_done": False, "pnl": 0.0
-        }
-        st.session_state.trades.append(new_trade)
-        save_data(st.session_state.trades)
-        send_telegram(f"🚀 {signal} {symbol} Entry: {curr_p}")
-
-    # ================= MANAGEMENT =================
+    # MANAGEMENT (Trailing SL)
     for t in st.session_state.trades:
         if t["status"] == "OPEN" and t["pair"] == symbol:
-            pnl_move = (curr_p - t["entry"]) if t["side"] == "BUY" else (t["entry"] - curr_p)
-            t["pnl"] = round(pnl_move * t["qty"], 2)
+            move = (curr_p - t["entry"]) if t["side"] == "LONG" else (t["entry"] - curr_p)
+            t["pnl"] = round(move * t["qty"], 2)
+            
+            # T1 Hit: Move SL to Breakeven
+            if not t["partial"] and (curr_p >= t["target"] if t["side"] == "LONG" else curr_p <= t["target"]):
+                t["partial"], t["sl"] = True, t["entry"]
+                save_history()
 
-            # T1
-            if not t["partial_done"]:
-                hit_t1 = (curr_p >= t["target1"]) if t["side"] == "BUY" else (curr_p <= t["target1"])
-                if hit_t1:
-                    t["partial_done"] = True
-                    t["qty"] = t["qty"] / 2
-                    secure_price = t["entry"] * (1 + SECURE_PCT) if t["side"] == "BUY" else t["entry"] * (1 - SECURE_PCT)
-                    t["sl"] = round(secure_price, 2)
-                    save_data(st.session_state.trades)
-                    send_telegram(f"💰 T1 HIT {symbol} | SL Trailed")
+            # Active Trailing (Prev Candle High/Low)
+            if t["partial"]:
+                trail_price = prev["low"] if t["side"] == "LONG" else prev["high"]
+                if t["side"] == "LONG" and trail_price > t["sl"]: t["sl"] = round(trail_price, 2)
+                elif t["side"] == "SHORT" and trail_price < t["sl"]: t["sl"] = round(trail_price, 2)
 
-            # ✅ REAL TRAILING SL
-            if t["partial_done"]:
-                if t["side"] == "BUY":
-                    new_sl = df.iloc[-2]["low"]
-                    if new_sl > t["sl"]:
-                        t["sl"] = round(new_sl, 2)
-                else:
-                    new_sl = df.iloc[-2]["high"]
-                    if new_sl < t["sl"]:
-                        t["sl"] = round(new_sl, 2)
+            # Exit Hit
+            if (curr_p <= t["sl"] if t["side"] == "LONG" else curr_p >= t["sl"]):
+                t["status"], t["exit_t"] = "CLOSED", datetime.now().strftime("%d/%m %H:%M:%S")
+                save_history()
 
-            # ✅ CANDLE BASED SL HIT
-            if t["side"] == "BUY":
-                hit_sl = df.iloc[-1]["low"] <= t["sl"]
-            else:
-                hit_sl = df.iloc[-1]["high"] >= t["sl"]
+# ================= 4. DASHBOARD UI =================
+st.subheader("📡 Live Market Intelligence")
+t_col1, t_col2 = st.columns(2)
+for i, mw in enumerate(market_watch):
+    with (t_col1 if i == 0 else t_col2):
+        color = "#2ecc71" if mw["Signal"] == "LONG" else "#e74c3c" if mw["Signal"] == "SHORT" else "#555"
+        st.markdown(f"""
+            <div style="padding:15px; border-radius:10px; border-left: 8px solid {color}; background-color:#1e1e1e;">
+                <h2 style="margin:0;">{mw['Symbol']} <small style="font-size:12px; color:{color};">{mw['Signal']}</small></h2>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+                    <div><p style="color:#888;margin:0;font-size:12px;">PRICE</p><b>${mw['Price']}</b></div>
+                    <div><p style="color:#888;margin:0;font-size:12px;">VWAP</p><b>{mw['VWAP']}</b></div>
+                    <div><p style="color:#888;margin:0;font-size:12px;">POC</p><b style="color:#f1c40f;">{mw['POC']}</b></div>
+                    <div><p style="color:#888;margin:0;font-size:12px;">DELTA</p><b style="color:{color};">{mw['Delta']}</b></div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
 
-            if hit_sl:
-                t["status"], t["exit"] = "CLOSED", curr_p
-                save_data(st.session_state.trades)
-                send_telegram(f"❌ EXIT {symbol} @ {curr_p} | P&L: ${t['pnl']}")
-
-# ================= 5. UI =================
-st.subheader("📊 Live Market Watch")
-st.table(pd.DataFrame(market_watch))
 st.divider()
-
-st.subheader("📋 Active & Closed Trades")
+st.subheader("📋 Trade Management Dashboard")
 if st.session_state.trades:
-    # Header columns setup
-    header = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
-    header[0].write("**Symbol**")
-    header[1].write("**Side**")
-    header[2].write("**Entry**")
-    header[3].write("**SL (Live)**")
-    header[4].write("**Target**")
-    header[5].write("**PnL**")
-    header[6].write("**Entry T**")
-    header[7].write("**Exit T**")
-    header[8].write("**Action**")
+    df_disp = pd.DataFrame(st.session_state.trades).copy()
+    df_disp = df_disp.rename(columns={
+        "pair": "Symbol", "side": "Side", "entry": "Entry", "sl": "SL (Live)",
+        "target": "Target", "pnl": "PnL", "entry_t": "Entry T", "exit_t": "Exit T"
+    })
+    df_disp["Action"] = df_disp.apply(lambda r: "🔴 Closed" if r["status"]=="CLOSED" else ("✅ T1 Hit" if r["partial"] else "🟢 Running"), axis=1)
+    
+    cols = ["Symbol", "Side", "Entry", "SL (Live)", "Target", "PnL", "Entry T", "Exit T", "Action"]
+    st.dataframe(df_show := df_disp[cols].sort_index(ascending=False), use_container_width=True, hide_index=True)
+    st.download_button("📥 Download Trade History", df_show.to_csv(index=False).encode('utf-8'), "trades.csv", "text/csv")
+else:
+    st.info("Searching for FVG + POC Momentum...")
 
-    for i, t in enumerate(st.session_state.trades):
-        row = st.columns([1.2, 0.8, 1, 1, 1, 1, 1, 1.2, 1])
-        
-        # Symbol & Side
-        row[0].write(f"**{t.get('pair')}**")
-        row[1].write(t.get('side'))
-        
-        # Entry Price
-        row[2].write(f"{t.get('entry')}")
-        
-        # --- TRAIL SL LOGIC DISPLAY ---
-        # Agar SL trail hua hai toh ye current live SL dikhayega
-        sl_val = t.get('sl', 0)
-        row[3].write(f"🛡️ {sl_val}")
-        
-        # Target 1
-        row[4].write(f"🎯 {t.get('target1')}")
-        
-        # PnL with Color
-        pnl = t.get('pnl', 0)
-        color = "green" if pnl > 0 else "red"
-        row[5].write(f":{color}[{pnl}]")
-        
-        # Times
-        row[6].write(f"{t.get('entry_time', '-')}")
-        row[7].write(f"{t.get('exit_time', '-')}")
-
-        # Action Button or Status
-        if t["status"] == "OPEN":
-            if row[8].button(f"Exit", key=f"exit_btn_{i}"):
-                t["status"] = "CLOSED"
-                t["exit_time"] = datetime.now().strftime("%H:%M:%S")
-                t["exit_timestamp"] = time.time()
-                save_data(st.session_state.trades)
-                st.rerun()
-        else:
-            row[8].write("✅ Closed")
-
-    # ================= 6. DOWNLOAD SECTION =================
-    if st.session_state.trades:
-       st.divider()
-       # Dataframe ko CSV format mein convert karein
-       df_download = pd.DataFrame(st.session_state.trades)
-       csv_data = df_download.to_csv(index=False).encode('utf-8')
-
-       # Download Button
-       st.download_button(
-           label="📥 Download Trade History (CSV)",
-           data=csv_data,
-           file_name=f"trading_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-           mime="text/csv",
-           help="Click here to download all trades in an Excel-friendly CSV format"
-       )
 
