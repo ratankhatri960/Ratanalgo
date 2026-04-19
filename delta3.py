@@ -145,7 +145,7 @@ else:
                         </div>
                         <div>
                             <p style="color:#888; margin:0; font-size:12px; letter-spacing:1px;">VWAP</p>
-                            <p style="font-size:20px; margin:0; color:#ddd;">{mw['VWAP']}</p>
+                            <p style="font-size:20px; margin:0; color:#ddd;">{mw['vwap']}</p>
                         </div>
                         <div>
                             <p style="color:#888; margin:0; font-size:12px; letter-spacing:1px;">POC (MAX VOL)</p>
