@@ -20,9 +20,11 @@ headers = {
     "Connection": "keep-alive"
 }
 
+# ================= INIT SESSION (IMPORTANT FIX) =================
 def init_session():
     try:
         session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=5)
     except:
         pass
 
@@ -32,28 +34,21 @@ init_session()
 INDEX_LIST = ["NIFTY", "BANKNIFTY", "SENSEX"]
 scanner_results = []
 
-# ================= REAL SPOT =================
-def get_spot(symbol):
-    try:
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-        r = session.get(url, headers=headers, timeout=5).json()
-        return r["records"]["underlyingValue"]
-    except:
-        return None
-
 # ================= OPTION CHAIN =================
 def get_chain(symbol):
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
 
-    for i in range(5):
+    for _ in range(5):
         try:
             r = session.get(url, headers=headers, timeout=10)
 
             if r.status_code == 200:
-                return r.json()
-            else:
-                init_session()
-                time.sleep(1)
+                data = r.json()
+                if "records" in data:
+                    return data
+
+            init_session()
+            time.sleep(1)
 
         except:
             init_session()
@@ -70,7 +65,7 @@ def calc_delta(S, K, T=0.02, r=0.06, sigma=0.2, opt="CE"):
     except:
         return 0
 
-# ================= PARSE =================
+# ================= PARSE OPTION CHAIN =================
 def parse_chain(data, spot):
     rows = []
 
@@ -119,23 +114,21 @@ def select_strike(df, spot, signal):
     else:
         return int(atm), "PE"
 
-# ================= ENGINE =================
-results = []
-
+# ================= MAIN ENGINE =================
 for symbol in INDEX_LIST:
 
     data = get_chain(symbol)
 
-    if not data:
+    if data is None:
         st.warning(f"{symbol} data not fetched ❌")
         continue
     else:
         st.success(f"{symbol} data received ✅")
 
-    spot = get_spot(symbol)
-
-    if spot is None:
-        st.warning(f"{symbol} spot not available ❌")
+    # 🔥 FIX: single source of truth for spot
+    try:
+        spot = data["records"]["underlyingValue"]
+    except:
         continue
 
     df, atm = parse_chain(data, spot)
@@ -178,9 +171,7 @@ for symbol in INDEX_LIST:
     ce_oi = atm["ce_oi"]
     pe_oi = atm["pe_oi"]
 
-    valid = False
-    if direction:
-        valid = fake_filter(delta, ce_oi, pe_oi, direction)
+    valid = fake_filter(delta, ce_oi, pe_oi, direction) if direction else False
 
     status = "❌ REJECTED"
     if valid and signal != "NO TRADE":
@@ -202,33 +193,23 @@ for symbol in INDEX_LIST:
 # ================= UI =================
 st.subheader("📊 Institutional Option Scanner (ATM)")
 
-if scanner_results:
-    scan_df = pd.DataFrame(scanner_results)
+if len(scanner_results) == 0:
+    st.warning("⚠️ NSE Data not available. Retrying...")
 
-    # SAFE STATUS FORMAT (NO STYLE ERROR)
+scan_df = pd.DataFrame(scanner_results)
+
+if not scan_df.empty:
     scan_df["Status"] = scan_df["Status"].apply(
         lambda x: "🟢 VALID" if "VALID" in str(x) else "🔴 REJECTED"
     )
 
     st.dataframe(scan_df, use_container_width=True)
 
-else:
-    st.warning("⚠️ NSE Data not available. Retrying...")
-
 st.divider()
 
 st.subheader("📋 Active & Closed Option Trades")
 
 if "trades" in st.session_state and st.session_state.trades:
-    df = pd.DataFrame(st.session_state.trades)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(pd.DataFrame(st.session_state.trades), use_container_width=True)
 else:
     st.info("Searching for Institutional signals...")
-
-st.sidebar.header("Settings")
-
-if st.sidebar.button("🗑️ Clear Trade History"):
-    st.session_state.trades = []
-    st.rerun()
-
-st.sidebar.write(f"Last API Refresh: {datetime.now().strftime('%H:%M:%S')}")
