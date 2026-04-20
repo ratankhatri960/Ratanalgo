@@ -206,10 +206,12 @@ scan_df = pd.DataFrame(scanner_results)
 def style_status(v):
     return 'color: green; font-weight: bold' if 'VALID' in str(v) else 'color: red'
 
-st.dataframe(
-    scan_df.style.applymap(style_status, subset=['Status']),
-    use_container_width=True
-)
+if not scan_df.empty and "Status" in scan_df.columns:
+    scan_df["Status"] = scan_df["Status"].apply(
+        lambda x: "🟢 VALID" if "VALID" in str(x) else "🔴 REJECTED"
+    )
+
+st.dataframe(scan_df, use_container_width=True)
 
 st.divider()
 
