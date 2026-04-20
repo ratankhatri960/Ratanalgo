@@ -206,7 +206,10 @@ scan_df = pd.DataFrame(scanner_results)
 def style_status(v):
     return 'color: green; font-weight: bold' if 'VALID' in str(v) else 'color: red'
 
-st.table(scan_df.style.applymap(style_status, subset=['Status']))
+st.dataframe(
+    scan_df.style.applymap(style_status, subset=['Status']),
+    use_container_width=True
+)
 
 st.divider()
 
