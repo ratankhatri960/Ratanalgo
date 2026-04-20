@@ -12,7 +12,13 @@ st.title("🔥 Institutional Options Bot (EMA + VWAP + FVG + Delta + OI)")
 
 # ================= SESSION =================
 session = requests.Session()
-headers = {"User-Agent": "Mozilla/5.0"}
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive"
+}
 
 def init_session():
     try:
@@ -25,41 +31,30 @@ init_session()
 # ================= CONFIG =================
 INDEX_LIST = ["NIFTY", "BANKNIFTY", "SENSEX"]
 scanner_results = []
-CSV_FILE = "option_trades.csv"
 
-# ================= STATE =================
-if "trades" not in st.session_state:
-    if os.path.exists(CSV_FILE):
-        try:
-            st.session_state.trades = pd.read_csv(CSV_FILE).to_dict('records')
-        except:
-            st.session_state.trades = []
-    else:
-        st.session_state.trades = []
-
-def save_trades(data):
-    pd.DataFrame(data).to_csv(CSV_FILE, index=False)
-
-# ================= SPOT =================
+# ================= REAL SPOT =================
 def get_spot(symbol):
-    return {
-        "NIFTY": 22500,
-        "BANKNIFTY": 48000,
-        "SENSEX": 74500
-    }[symbol]
+    try:
+        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+        r = session.get(url, headers=headers, timeout=5).json()
+        return r["records"]["underlyingValue"]
+    except:
+        return None
 
 # ================= OPTION CHAIN =================
 def get_chain(symbol):
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
 
-    for _ in range(3):
+    for i in range(5):
         try:
-            r = session.get(url, headers=headers, timeout=5)
+            r = session.get(url, headers=headers, timeout=10)
+
             if r.status_code == 200:
                 return r.json()
             else:
                 init_session()
                 time.sleep(1)
+
         except:
             init_session()
             time.sleep(1)
@@ -68,9 +63,12 @@ def get_chain(symbol):
 
 # ================= DELTA =================
 def calc_delta(S, K, T=0.02, r=0.06, sigma=0.2, opt="CE"):
-    d1 = (math.log(S/K) + (r + sigma**2/2)*T) / (sigma * math.sqrt(T))
-    nd1 = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
-    return nd1 if opt == "CE" else nd1 - 1
+    try:
+        d1 = (math.log(S/K) + (r + sigma**2/2)*T) / (sigma * math.sqrt(T))
+        nd1 = 0.5 * (1 + math.erf(d1 / math.sqrt(2)))
+        return nd1 if opt == "CE" else nd1 - 1
+    except:
+        return 0
 
 # ================= PARSE =================
 def parse_chain(data, spot):
@@ -90,6 +88,10 @@ def parse_chain(data, spot):
         })
 
     df = pd.DataFrame(rows)
+
+    if df.empty:
+        return df, None
+
     df["dist"] = abs(df["strike"] - spot)
     atm = df.loc[df["dist"].idxmin()]
 
@@ -111,19 +113,37 @@ def fake_filter(delta, ce_oi, pe_oi, direction):
 # ================= STRIKE =================
 def select_strike(df, spot, signal):
     atm = df.loc[df["dist"].idxmin()]["strike"]
-    return int(atm), ("CE" if signal == "BUY" else "PE")
+
+    if signal == "BUY":
+        return int(atm), "CE"
+    else:
+        return int(atm), "PE"
 
 # ================= ENGINE =================
+results = []
+
 for symbol in INDEX_LIST:
 
     data = get_chain(symbol)
+
     if not data:
+        st.warning(f"{symbol} data not fetched ❌")
         continue
+    else:
+        st.success(f"{symbol} data received ✅")
 
     spot = get_spot(symbol)
+
+    if spot is None:
+        st.warning(f"{symbol} spot not available ❌")
+        continue
+
     df, atm = parse_chain(data, spot)
 
-    # MOCK LOGIC
+    if df.empty or atm is None:
+        continue
+
+    # ================= INDICATORS =================
     EMA20 = spot * 1.001
     EMA50 = spot * 0.999
     VWAP = spot * 1.0005
@@ -139,6 +159,7 @@ for symbol in INDEX_LIST:
 
     price = spot
 
+    # ================= SIGNAL =================
     signal = "NO TRADE"
     direction = None
 
@@ -151,89 +172,63 @@ for symbol in INDEX_LIST:
         direction = "DOWN"
 
     strike, opt = select_strike(df, spot, signal)
+
     delta = calc_delta(spot, strike, opt=opt)
 
     ce_oi = atm["ce_oi"]
     pe_oi = atm["pe_oi"]
 
-    valid = fake_filter(delta, ce_oi, pe_oi, direction) if direction else False
+    valid = False
+    if direction:
+        valid = fake_filter(delta, ce_oi, pe_oi, direction)
 
     status = "❌ REJECTED"
     if valid and signal != "NO TRADE":
         status = "🔥 VALID TRADE"
 
-        # ===== AUTO PAPER TRADE =====
-        active = any(t["Index"] == symbol and t["Status"] == "OPEN" for t in st.session_state.trades)
-
-        if not active:
-            st.session_state.trades.append({
-                "Index": symbol,
-                "Type": opt,
-                "Strike": strike,
-                "Entry_LTP": spot,
-                "Current_LTP": spot,
-                "PnL": 0,
-                "Entry_Time": datetime.now().strftime("%d/%m %H:%M:%S"),
-                "Exit_Time": "-",
-                "Status": "OPEN"
-            })
-            save_trades(st.session_state.trades)
-
     scanner_results.append({
         "Index": symbol,
-        "Spot": spot,
+        "Spot": round(spot, 2),
         "Signal": signal,
+        "Strike": strike,
+        "Type": opt,
+        "Delta": round(delta, 2),
+        "CE OI": ce_oi,
+        "PE OI": pe_oi,
         "Status": status,
         "Time": datetime.now().strftime("%H:%M:%S")
     })
 
-# ================= LIVE PNL UPDATE =================
-for t in st.session_state.trades:
-    if t["Status"] == "OPEN":
-        spot = get_spot(t["Index"])
-        t["Current_LTP"] = spot
-
-        move = (spot - t["Entry_LTP"]) if t["Type"] == "CE" else (t["Entry_LTP"] - spot)
-        t["PnL"] = round(move, 2)
-
-save_trades(st.session_state.trades)
-
 # ================= UI =================
 st.subheader("📊 Institutional Option Scanner (ATM)")
 
-scan_df = pd.DataFrame(scanner_results)
+if scanner_results:
+    scan_df = pd.DataFrame(scanner_results)
 
-def style_status(v):
-    return 'color: green; font-weight: bold' if 'VALID' in str(v) else 'color: red'
-
-if not scan_df.empty and "Status" in scan_df.columns:
+    # SAFE STATUS FORMAT (NO STYLE ERROR)
     scan_df["Status"] = scan_df["Status"].apply(
         lambda x: "🟢 VALID" if "VALID" in str(x) else "🔴 REJECTED"
     )
 
-st.dataframe(scan_df, use_container_width=True)
+    st.dataframe(scan_df, use_container_width=True)
+
+else:
+    st.warning("⚠️ NSE Data not available. Retrying...")
 
 st.divider()
 
 st.subheader("📋 Active & Closed Option Trades")
 
-if st.session_state.trades:
-
+if "trades" in st.session_state and st.session_state.trades:
     df = pd.DataFrame(st.session_state.trades)
-
-    st.dataframe(df.sort_index(ascending=False), use_container_width=True)
-
+    st.dataframe(df, use_container_width=True)
 else:
     st.info("Searching for Institutional signals...")
 
-# ================= SIDEBAR =================
 st.sidebar.header("Settings")
 
 if st.sidebar.button("🗑️ Clear Trade History"):
-    if os.path.exists(CSV_FILE):
-        os.remove(CSV_FILE)
     st.session_state.trades = []
     st.rerun()
 
-st.sidebar.markdown("---")
 st.sidebar.write(f"Last API Refresh: {datetime.now().strftime('%H:%M:%S')}")
